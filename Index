@@ -1,0 +1,2325 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบแจ้งซ่อมเครื่องจักร</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#1F2C3B;
+    --navy-2:#28394d;
+    --amber:#E8A33D;
+    --amber-dark:#c17f1e;
+    --paper:#F5F2EA;
+    --card:#FFFFFF;
+    --ink:#232323;
+    --slate:#6b7785;
+    --slate-light:#98a2ac;
+    --success:#2F8F6B;
+    --success-bg:#e6f3ee;
+    --danger:#B5433A;
+    --danger-bg:#fbeae8;
+    --line:#dfd8c8;
+    --warn:#c17f1e;
+    --warn-bg:#fbf0dd;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:'Sarabun',sans-serif; font-size:15px; line-height:1.5;
+    min-height:100vh;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+  header.topbar{
+    background:var(--navy); color:#fff; padding:14px 20px;
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    border-bottom:4px solid var(--amber);
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .logo{
+    width:34px; height:34px; border-radius:7px; background:var(--amber);
+    display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--navy); font-size:16px;
+    transform:rotate(-4deg);
+  }
+  .brand h1{font-size:16px; margin:0; font-weight:600;}
+  .brand .sub{font-size:11.5px; color:#b9c3cd; margin-top:1px;}
+  .role-select{display:flex; align-items:center; gap:8px; font-size:13px; color:#d9dfe5;}
+  .role-select select{
+    background:var(--navy-2); color:#fff; border:1px solid #3c5064; border-radius:6px;
+    padding:7px 10px; font-family:'Sarabun',sans-serif; font-size:13.5px; cursor:pointer;
+  }
+  nav.tabs{
+    display:flex; gap:2px; background:var(--navy-2); padding:0 14px; overflow-x:auto;
+  }
+  nav.tabs button{
+    background:none; border:none; color:#c3ccd4; padding:12px 16px; font-family:'Sarabun',sans-serif;
+    font-size:14px; cursor:pointer; border-bottom:3px solid transparent; white-space:nowrap; position:relative;
+  }
+  nav.tabs button.active{color:#fff; border-bottom-color:var(--amber); font-weight:600;}
+  nav.tabs button .badge{
+    background:var(--amber); color:var(--navy); border-radius:20px; font-size:10.5px; font-weight:700;
+    padding:1px 6px; margin-left:6px;
+  }
+  main{max-width:920px; margin:0 auto; padding:22px 16px 80px;}
+  h2.view-title{font-size:19px; margin:0 0 4px; font-weight:700; color:var(--navy);}
+  p.view-sub{color:var(--slate); font-size:13.5px; margin:0 0 20px;}
+  .card{background:var(--card); border-radius:10px; padding:20px; box-shadow:0 1px 3px rgba(31,44,59,0.08); border:1px solid #ece6d8;}
+  label.field-label{display:block; font-size:13px; font-weight:600; color:var(--navy); margin-bottom:6px;}
+  .req-star{color:var(--danger);}
+  select.input, input.input, textarea.input{
+    width:100%; padding:10px 12px; border-radius:7px; border:1.5px solid var(--line); background:#fff;
+    font-family:'Sarabun',sans-serif; font-size:14px; color:var(--ink);
+  }
+  select.input:focus, input.input:focus, textarea.input:focus{outline:none; border-color:var(--amber-dark);}
+  textarea.input{resize:vertical; min-height:80px;}
+  .field{margin-bottom:18px;}
+  .dept-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px;}
+  .dept-btn{
+    border:2px solid var(--line); background:#fff; border-radius:9px; padding:14px 8px; cursor:pointer;
+    font-family:'JetBrains Mono',monospace; font-weight:700; font-size:17px; color:var(--navy);
+    text-align:center; transition:all .12s;
+  }
+  .dept-btn:hover{border-color:var(--amber-dark);}
+  .dept-btn.selected{background:var(--navy); border-color:var(--navy); color:#fff;}
+  .dept-btn .full-name{display:block; font-family:'Sarabun',sans-serif; font-weight:400; font-size:11px; margin-top:3px; opacity:.85;}
+  .docnum-box{
+    display:flex; align-items:center; gap:12px; background:var(--paper); border:1px dashed var(--amber-dark);
+    border-radius:8px; padding:12px 16px; margin-bottom:18px;
+  }
+  .doc-chip{
+    font-family:'JetBrains Mono',monospace; font-weight:700; font-size:18px; background:#fff;
+    border:2px dashed var(--amber-dark); padding:5px 12px; border-radius:4px; transform:rotate(-2deg);
+    display:inline-block; color:var(--navy); box-shadow:1px 1px 0 rgba(0,0,0,.05);
+  }
+  .docnum-box .hint{font-size:12.5px; color:var(--slate);}
+  .search-wrap{position:relative;}
+  .search-results{
+    position:absolute; z-index:20; top:calc(100% + 4px); left:0; right:0; background:#fff;
+    border:1.5px solid var(--line); border-radius:8px; max-height:220px; overflow-y:auto;
+    box-shadow:0 6px 18px rgba(0,0,0,.12);
+  }
+  .search-item{padding:10px 12px; cursor:pointer; border-bottom:1px solid #f0ece1; font-size:13.5px;}
+  .search-item:last-child{border-bottom:none;}
+  .search-item:hover{background:var(--paper);}
+  .search-item b.code{font-family:'JetBrains Mono',monospace; color:var(--navy);}
+  .selected-machine{
+    margin-top:8px; background:var(--success-bg); border:1px solid #bfe0d1; border-radius:7px;
+    padding:9px 12px; font-size:13.5px; display:flex; justify-content:space-between; align-items:center;
+  }
+  .selected-machine button{background:none;border:none;color:var(--danger);cursor:pointer;font-size:12.5px;font-family:'Sarabun',sans-serif;}
+  .photo-drop{
+    border:2px dashed var(--line); border-radius:9px; padding:18px; text-align:center; cursor:pointer; color:var(--slate); font-size:13.5px;
+  }
+  .photo-drop:hover{border-color:var(--amber-dark); color:var(--amber-dark);}
+  .photo-thumbs{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;}
+  .photo-thumb{position:relative; width:74px; height:74px; border-radius:7px; overflow:hidden; border:1px solid var(--line);}
+  .photo-thumb img{width:100%; height:100%; object-fit:cover;}
+  .photo-thumb .rm{
+    position:absolute; top:2px; right:2px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%;
+    width:18px; height:18px; font-size:11px; cursor:pointer; line-height:18px; padding:0;
+  }
+  .btn{
+    border:none; border-radius:8px; padding:11px 20px; font-family:'Sarabun',sans-serif; font-weight:600; font-size:14px;
+    cursor:pointer; display:inline-flex; align-items:center; gap:6px;
+  }
+  .btn-primary{background:var(--amber); color:var(--navy);}
+  .btn-primary:hover{background:var(--amber-dark); color:#fff;}
+  .btn-primary:disabled{background:#e4dcc8; color:#a99f86; cursor:not-allowed;}
+  .btn-outline{background:#fff; border:1.5px solid var(--line); color:var(--navy);}
+  .btn-outline:hover{border-color:var(--navy);}
+  .btn-success{background:var(--success); color:#fff;}
+  .btn-danger-outline{background:#fff; border:1.5px solid var(--danger); color:var(--danger);}
+  .btn-danger-outline:hover{background:var(--danger-bg);}
+  .btn-sm{padding:7px 13px; font-size:12.5px; border-radius:6px;}
+  .btn-block{width:100%; justify-content:center;}
+
+  /* order ticket card */
+  .order-card{
+    background:var(--card); border-radius:9px; padding:16px 16px 16px 20px; margin-bottom:12px;
+    border:1px solid #ece6d8; position:relative; box-shadow:0 1px 2px rgba(31,44,59,.06);
+    border-left-width:6px; border-left-style:solid;
+  }
+  .order-card::before, .order-card::after{
+    content:''; position:absolute; left:-7px; width:14px; height:14px; border-radius:50%;
+    background:var(--paper); border:1px solid #ece6d8;
+  }
+  .order-card::before{top:-7px;}
+  .order-card::after{bottom:-7px;}
+  .order-top{display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;}
+  .order-meta{font-size:12px; color:var(--slate); margin-top:4px;}
+  .status-pill{
+    font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:20px; white-space:nowrap;
+  }
+  .order-body{margin-top:10px; font-size:13.5px;}
+  .order-body .cause{color:var(--ink); margin-top:4px;}
+  .order-actions{margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;}
+  .filters{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;}
+  .filters select{font-size:13px; padding:8px 10px;}
+  .empty-state{text-align:center; padding:50px 20px; color:var(--slate);}
+  .empty-state .big{font-size:34px; margin-bottom:8px;}
+
+  /* detail view */
+  .back-link{background:none;border:none;color:var(--navy); cursor:pointer; font-size:13.5px; font-weight:600; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px; padding:0;}
+  .detail-head{display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px; margin-bottom:16px;}
+  .grid-2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media(max-width:600px){.grid-2{grid-template-columns:1fr;}}
+  .kv{margin-bottom:10px;}
+  .kv .k{font-size:11.5px; color:var(--slate); text-transform:uppercase; letter-spacing:.4px;}
+  .kv .v{font-size:14px; margin-top:2px;}
+  .timeline{margin-top:6px; border-left:2px solid var(--line); padding-left:16px;}
+  .timeline-item{position:relative; padding-bottom:16px; font-size:13px;}
+  .timeline-item::before{content:''; position:absolute; left:-21px; top:3px; width:9px; height:9px; border-radius:50%; background:var(--amber-dark);}
+  .timeline-item .t-time{color:var(--slate); font-size:11.5px;}
+  .gallery{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
+  .gallery img{width:100px; height:100px; object-fit:cover; border-radius:7px; border:1px solid var(--line); cursor:pointer;}
+  .action-box{background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:16px; margin-top:16px;}
+  .action-box h4{margin:0 0 10px; font-size:14px; color:var(--navy);}
+  .reject-box{margin-top:10px; background:#fff; border:1px solid var(--line); border-radius:7px; padding:12px;}
+
+  .update-banner{
+    background:var(--warn-bg); color:var(--warn); border-bottom:2px solid var(--warn);
+    padding:10px 20px; display:flex; align-items:center; justify-content:center; gap:12px;
+    font-size:13.5px; font-weight:600; flex-wrap:wrap; text-align:center;
+  }
+
+  /* notifications */
+  .notif-item{display:flex; gap:12px; padding:13px 14px; border-radius:8px; margin-bottom:8px; background:#fff; border:1px solid #ece6d8;}
+  .notif-item.unread{background:#fffaf0; border-color:var(--amber);}
+  .notif-icon{width:34px; height:34px; border-radius:50%; background:var(--navy); color:#fff; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;}
+  .notif-text{font-size:13.5px;}
+  .notif-time{font-size:11px; color:var(--slate); margin-top:2px;}
+
+  /* settings */
+  .settings-section{margin-bottom:26px;}
+  .settings-section h3{font-size:15px; color:var(--navy); margin:0 0 4px;}
+  .settings-section .desc{font-size:12.5px; color:var(--slate); margin:0 0 12px;}
+  table.mini{width:100%; border-collapse:collapse; font-size:13px;}
+  table.mini th{text-align:left; font-size:11.5px; color:var(--slate); text-transform:uppercase; padding:6px 8px; border-bottom:1.5px solid var(--line);}
+  table.mini td{padding:8px; border-bottom:1px solid #f0ece1; vertical-align:middle;}
+  table.mini td .del{background:none; border:none; color:var(--danger); cursor:pointer; font-size:12px;}
+  .inline-form{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
+  .inline-form input, .inline-form select{flex:1; min-width:100px;}
+  .note-box{background:var(--warn-bg); border:1px solid #e6cd9c; border-radius:8px; padding:12px 14px; font-size:12.5px; color:#7a5a13; margin-bottom:18px;}
+  .summary-stats{display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+  .summary-stats .stat{flex:1; padding:12px 10px; text-align:center; border-right:1px solid var(--line);}
+  .summary-stats .stat:last-child{border-right:none;}
+  .summary-stats .stat .num{font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:700; color:var(--navy);}
+  .summary-stats .stat .lbl{font-size:11px; color:var(--slate); margin-top:2px;}
+  .summary-link{
+    display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px;
+    background:var(--paper); border:1px dashed var(--amber-dark); border-radius:8px; padding:11px 13px;
+  }
+  .summary-link .txt{font-size:12.5px; color:var(--ink);}
+  .summary-link .txt b{color:var(--navy);}
+  .summary-link a{font-size:12px; font-weight:700; color:var(--amber-dark); text-decoration:none; white-space:nowrap;}
+  .summary-link a:hover{text-decoration:underline;}
+  .info-toggle{margin-bottom:10px;}
+  .info-toggle summary{
+    cursor:pointer; font-size:12.5px; color:var(--amber-dark); font-weight:600; list-style:none;
+  }
+  .info-toggle summary::-webkit-details-marker{display:none;}
+  .info-toggle summary::before{content:'ℹ️ '; }
+  .info-toggle p{margin-top:8px;}
+
+  .toast-wrap{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; gap:8px; align-items:center;}
+  .toast{background:var(--navy); color:#fff; padding:11px 20px; border-radius:8px; font-size:13.5px; box-shadow:0 6px 20px rgba(0,0,0,.2); animation:toastin .18s ease-out;}
+  .toast.err{background:var(--danger);}
+  @keyframes toastin{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+
+  ::-webkit-scrollbar{width:8px; height:8px;}
+  ::-webkit-scrollbar-thumb{background:#cfc7b2; border-radius:8px;}
+</style>
+</head>
+<body>
+<div id="app">กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…</div>
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+/* ============================= CONFIG / CONSTANTS ============================= */
+const ROLES = {
+  requester: { label:'ผู้แจ้งซ่อม', icon:'📝' },
+  fm:        { label:'ผู้จัดการโรงงาน (อนุมัติ 1)', icon:'🏭' },
+  gm:        { label:'ผู้จัดการทั่วไป (อนุมัติ 2)', icon:'🗂️' },
+  maint:     { label:'ผู้จัดการแผนกซ่อมบำรุง', icon:'🔧' },
+  tech:      { label:'ช่าง', icon:'🧰' },
+  admin:     { label:'ผู้ดูแลระบบ (ตั้งค่า)', icon:'⚙️' },
+};
+// admin เป็น super-role — เข้าถึงฟังก์ชันของทุกบทบาทได้โดยไม่ต้องมีแถวสิทธิ์แยกในชีต
+// "สิทธิ์ผู้ใช้ LINE" ทุกจุดที่เช็ค state.role===<role> เพื่อโชว์ปุ่ม/กล่องการทำงานของบทบาทนั้น
+// ให้เรียก hasRole(<role>) แทน ส่วนการ "ตัดสินใจว่าจะรันฟังก์ชันไหน" (เช่นใน confirmAction)
+// ต้องอิงจากสถานะใบแจ้งซ่อม ไม่ใช่ state.role ตรงๆ เพราะ admin ผ่าน hasRole ได้ทุกบทบาทพร้อมกัน
+function hasRole(role){ return state.role === role || state.role === 'admin'; }
+const STATUS_META = {
+  PENDING_FM:    { label:'รออนุมัติ (ผจก.โรงงาน)', color:'#c17f1e', bg:'#fbf0dd' },
+  PENDING_GM:    { label:'รออนุมัติ (ผจก.ทั่วไป)',  color:'#c17f1e', bg:'#fbf0dd' },
+  NEEDS_INFO_FM: { label:'ต้องการข้อมูลเพิ่มเติม (ผจก.โรงงาน)', color:'#6b4fa0', bg:'#f1ecf8' },
+  NEEDS_INFO_GM: { label:'ต้องการข้อมูลเพิ่มเติม (ผจก.ทั่วไป)', color:'#6b4fa0', bg:'#f1ecf8' },
+  PENDING_ASSIGN:{ label:'รอมอบหมายช่าง',           color:'#2a6f97', bg:'#e4f0f7' },
+  ASSIGNED:      { label:'รอดำเนินการ',             color:'#6b7785', bg:'#eef0f2' },
+  IN_PROGRESS:   { label:'กำลังซ่อม',               color:'#1F2C3B', bg:'#e6ecf1' },
+  PENDING_VERIFY:{ label:'รอผู้แจ้งตรวจสอบผลการซ่อม', color:'#6b4fa0', bg:'#f1ecf8' },
+  DONE:          { label:'ซ่อมเรียบร้อย',            color:'#2F8F6B', bg:'#e6f3ee' },
+  REJECTED:      { label:'ไม่อนุมัติ',               color:'#B5433A', bg:'#fbeae8' },
+};
+const VERIFY_RESULT_META = {
+  pass: 'ผ่าน — ใช้งานได้ปกติ',
+  fail: 'ไม่ผ่าน — ต้องซ่อมเพิ่มเติม',
+};
+const DEPT_DEFAULT = [
+  { code:'RB', name:'Rubber (RB)' },
+  { code:'GR', name:'Grinding (GR)' },
+  { code:'QA', name:'Quality Assurance (QA)' },
+  { code:'BG', name:'Bagging (BG)' },
+];
+const MACHINES_DEFAULT = [
+  { code:'RB-01', name:'เครื่องรีดยาง 1', dept:'RB' },
+  { code:'RB-02', name:'เครื่องรีดยาง 2', dept:'RB' },
+  { code:'RB-03', name:'เครื่องอบยาง', dept:'RB' },
+  { code:'GR-01', name:'เครื่องบดวัตถุดิบ 1', dept:'GR' },
+  { code:'GR-02', name:'เครื่องบดวัตถุดิบ 2', dept:'GR' },
+  { code:'QA-01', name:'เครื่องทดสอบแรงดึง', dept:'QA' },
+  { code:'QA-02', name:'เครื่องชั่งน้ำหนักดิจิทัล', dept:'QA' },
+  { code:'BG-01', name:'เครื่องบรรจุถุง 1', dept:'BG' },
+  { code:'BG-02', name:'เครื่องบรรจุถุง 2', dept:'BG' },
+];
+const TECH_DEFAULT = ['ช่างสมชาย (ไฟฟ้า)', 'ช่างวิชัย (เครื่องกล)', 'ช่างประเสริฐ (ทั่วไป)'];
+const DOC_TYPES = { request:'ใบคำร้อง', repair:'ใบแจ้งซ่อม' };
+const EXECUTION_PLAN_META = {
+  immediate:     'ดำเนินการได้ทันที',
+  need_purchase: 'ต้องการสั่งซื้ออุปกรณ์',
+  use_existing:  'ใช้อุปกรณ์ที่มีอยู่',
+};
+const INSPECTOR_OPINION_META = {
+  send_repair: 'ส่งซ่อม',
+  external:    'เรียกช่างภายนอกมาซ่อม',
+  self_repair: 'ซ่อมเอง',
+  buy_parts:   'ซื้ออุปกรณ์มาทำเอง',
+};
+
+const emptyForm = () => ({ dept:'', docType:'', machineCode:'', machineSearch:'', machineName:'', cause:'', neededDate:'', requestedBy:'', photos:[] });
+const emptyPartRow = () => ({ name:'', qty:'', unit:'', price:'', shop:'', note:'' });
+
+let state = {
+  role: null,
+  allowedRoles: [],
+  myName: '',
+  myTechName: '',
+  techIdentities: [],
+  deviceId: null,   // รหัสประจำเครื่อง/เบราว์เซอร์ ใช้แทน LINE userId เป็นตัวระบุตัวตน
+  didHash: '',      // ลายนิ้วมือ (sha256) ของ deviceId — ใช้เป็นคีย์ค้นสิทธิ์ในคำขอที่อนุมัติแล้ว
+  accessRequests: [],
+  myRequest: null,
+  lineUsers: [],       // ผู้ใช้ LINE ที่ทักเข้ามาหา OA (มาจากแท็บ "LINE Users" ในชีต)
+  lineUserRoles: {},   // userId -> { name, roles:[], techName } กำหนดโดย admin ในหน้าตั้งค่า
+  lineRecipients: [],  // { role, userId, name } อ่านอย่างเดียวจากแท็บ "แจ้งเตือน LINE - ผู้รับ" ที่พิมพ์เองในชีต
+  authStatus: 'loading', // loading | guest | pending | rejected | ok
+  view: 'new',
+  config: { departments: DEPT_DEFAULT, machines: MACHINES_DEFAULT, technicians: TECH_DEFAULT, lineWebhooks:{} },
+  counters: {},
+  orders: [],
+  notifications: [],
+  loaded: false,
+  ordersLoaded: false,   // true เมื่อ orders/notifications/counters โหลดรายการเต็มเสร็จแล้ว (ไม่ใช่แค่ใบเดียวที่ peek มา)
+  lineDataLoaded: false, // true เมื่อ lineUsers/lineUserRoles/lineRecipients โหลดแล้ว (เฉพาะตอน admin เข้าหน้าตั้งค่า)
+  form: emptyForm(),
+  showMachineDropdown: false,
+  selectedOrderId: null,
+  detailPhotos: [],
+  filterStatus: 'ALL',
+  filterDept: 'ALL',
+  updateAvailable: false,
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false,
+    grantRole:{}, grantTechName:{}, grantLineUserId:{},
+    editingAccessId:null, editRole:{}, editTechName:{},
+    lineRole:{}, lineTechName:{}, lineName:{}, newLineUserId:'', newLineUserName:'' },
+};
+
+/* ============================= STORAGE HELPERS (Google Sheets via Apps Script) ============================= */
+const API_URL = 'https://script.google.com/macros/s/AKfycbyJFozkOTsGdJGMjWfYAFT2riy_i94ap1dJKqK77QHintDQEcXPxAdv6140ZAaVPa5srA/exec';
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k/edit';
+const APP_URL = 'https://thtwgot-kh.github.io/maintenance-request/';
+/* คีย์ใน localStorage ที่เก็บ "รหัสประจำเครื่อง" — ตัวระบุตัวตนของผู้ใช้แทน LINE userId
+   (เดิมระบบบังคับล็อกอินผ่าน LINE LIFF ซึ่งใช้ได้เฉพาะเจ้าของ/ผู้ทดสอบของ LINE Login channel
+   ที่ยังอยู่สถานะ Developing เท่านั้น ทำให้พนักงานคนอื่นเข้าไม่ได้เลย จึงเลิกใช้ LIFF ทั้งหมด) */
+const DEVICE_ID_KEY = 'mtDeviceId';
+/* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
+   ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
+const APP_VERSION = '2026-08-13.1';
+
+async function storeGet(key){
+  try{
+    const res = await fetch(API_URL + '?key=' + encodeURIComponent(key));
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return data.value ? JSON.parse(data.value) : null;
+  }catch(e){ console.error('storage get failed', key, e); return undefined; }
+}
+async function getUserRoles(userId){
+  try{
+    const res = await fetch(API_URL + '?key=userRoles&userId=' + encodeURIComponent(userId));
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return data.value ? JSON.parse(data.value) : { roles:[], techNames:[] };
+  // คืน null (ไม่ใช่ { roles:[] }) ตอนเน็ต/เซิร์ฟเวอร์มีปัญหา เพื่อให้ resolveAccess() แยกออกจากกรณี
+  // "เช็คสำเร็จแต่ไม่มีสิทธิ์จริงๆ" ได้ — ไม่งั้นคนที่มีสิทธิ์อยู่แล้วจะโดนเด้งกลับไปหน้าขอสิทธิ์ทุกครั้งที่โหลดพลาด
+  }catch(e){ console.error('getUserRoles failed', e); return null; }
+}
+// ขอใบแจ้งซ่อมใบเดียวจากเซิร์ฟเวอร์ (กรองฝั่ง Apps Script) — ใช้ตอนเปิดแอปจากลิงก์แจ้งเตือน LINE
+// โดยตรง เพื่อโชว์หน้ารายละเอียดได้ไวโดยไม่ต้องรอโหลดรายการ orders ทั้งหมดก่อน
+async function getOrderById(id){
+  try{
+    const res = await fetch(API_URL + '?key=order&id=' + encodeURIComponent(id));
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return data.value ? JSON.parse(data.value) : null;
+  }catch(e){ console.error('getOrderById failed', id, e); return null; }
+}
+/* ============================= IDENTITY & ACCESS (ไม่ต้องล็อกอิน LINE) =============================
+   ใครก็เปิดลิงก์แอปนี้จากเบราว์เซอร์อะไรก็ได้ แล้ว "ขอสิทธิ์" ในหน้าแรก → ผู้ดูแลระบบ (admin) กดอนุมัติ
+   และเลือกบทบาทให้ → ผู้ขอเข้าใช้งานได้เองภายในไม่กี่วินาที โดยไม่ต้องล็อกอินซ้ำ
+
+   บทบาทของผู้ใช้หนึ่งคนมาจาก 2 แหล่งรวมกัน (union) — ใช้แหล่งไหนก็ได้:
+   1) ชีต "สิทธิ์ผู้ใช้ LINE" (คอลัมน์ userId | บทบาท | ชื่อ) — ผู้ดูแลพิมพ์แถวเองใน Google Sheet
+      โดยใส่ "รหัสประจำเครื่อง" (ขึ้นต้นด้วย D-) ลงคอลัมน์ userId ได้ตรงๆ ค้นหาฝั่งเซิร์ฟเวอร์
+      ผ่าน doGet('userRoles', ...) เหมือนเดิม (ไม่ต้องแก้ Apps Script)
+   2) คำขอสิทธิ์ที่ admin อนุมัติในแอป (KV key 'accessRequests') — กดอนุมัติในหน้าตั้งค่าได้เลย
+
+   หมายเหตุความปลอดภัย: ในคำขอที่เก็บบนเซิร์ฟเวอร์จะบันทึกเฉพาะ "ลายนิ้วมือ" (sha256) ของรหัส
+   ประจำเครื่อง ไม่เก็บรหัสตัวจริง เพื่อไม่ให้ผู้ใช้คนอื่นอ่านรายการคำขอแล้วนำรหัสของคนอื่นไปสวมสิทธิ์ */
+function randomToken(len){
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(36).padStart(2,'0')).join('').slice(0, len);
+}
+function getDeviceId(){
+  let id = null;
+  try{ id = localStorage.getItem(DEVICE_ID_KEY); }catch(e){ /* โหมดส่วนตัว/บล็อกคุกกี้ */ }
+  if(!id){
+    id = 'D-' + randomToken(24);
+    try{ localStorage.setItem(DEVICE_ID_KEY, id); }catch(e){ /* เก็บไม่ได้ = ต้องขอสิทธิ์ใหม่ทุกครั้ง */ }
+  }
+  return id;
+}
+async function sha256Hex(str){
+  if(!crypto.subtle) return '';   // ต้องเป็น https เท่านั้น (GitHub Pages เป็น https อยู่แล้ว)
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function requestFor(hash, list){
+  if(!hash) return null;
+  return (list || []).find(r => r.didHash === hash) || null;
+}
+// เติมชื่อผู้ล็อกอินลงช่อง "ชื่อผู้แจ้ง" ให้อัตโนมัติ แค่ตอนช่องยังว่างอยู่ — ไม่เขียนทับ
+// ถ้าผู้ใช้แก้ไขเป็นชื่ออื่นเอง (เช่น แจ้งซ่อมแทนเพื่อนร่วมงาน)
+function applyMyNameToForm(){
+  if(state.myName && !state.form.requestedBy) state.form.requestedBy = state.myName;
+}
+/* รวมบทบาทจากชีต + จากคำขอที่อนุมัติแล้ว แล้วตัดสินว่าเข้าใช้งานได้หรือยัง */
+async function resolveAccess(){
+  const [sheet, requests] = await Promise.all([
+    getUserRoles(state.deviceId),
+    storeGet('accessRequests'),
+  ]);
+  // sheet===null (getUserRoles ล้มเหลว) หรือ requests===undefined (storeGet ล้มเหลว) แปลว่าเช็คไม่สำเร็จ
+  // ไม่ใช่ "ไม่มีสิทธิ์จริงๆ" — ถ้าตอนนี้เข้าใช้งานอยู่แล้ว (authStatus==='ok') ห้ามล้างสิทธิ์ทิ้งเด็ดขาด
+  // คงสถานะเดิมไว้ก่อน ไม่งั้นแค่โหลดพลาดครั้งเดียว (เน็ตกระตุก/Apps Script ช้า) จะเด้งคนที่มีสิทธิ์อยู่แล้ว
+  // กลับไปหน้า "ขอสิทธิ์เข้าใช้งาน" ทั้งที่ยังมีสิทธิ์ปกติ — บั๊กนี้เคยเจอเป็นครั้งคราว
+  if((sheet === null || requests === undefined) && state.authStatus === 'ok') return;
+
+  state.accessRequests = Array.isArray(requests) ? requests : [];
+  const mine = requestFor(state.didHash, state.accessRequests);
+  state.myRequest = mine;
+
+  const roles = [...((sheet && sheet.roles) || [])];
+  const techNames = [...((sheet && (sheet.techNames || (sheet.techName ? [sheet.techName] : []))) || [])];
+  if(mine && mine.status === 'approved'){
+    (mine.roles || []).forEach(r => roles.push(r));
+    if(mine.techName) techNames.push(mine.techName);
+  }
+  // กรองเฉพาะบทบาทที่ระบบรู้จักจริง — พิมพ์ชื่อบทบาทผิดในชีต (เช่น "Tech") จะได้ไม่ทำให้แอปพัง
+  state.allowedRoles = [...new Set(roles.filter(r => ROLES[r]))];
+  state.techIdentities = [...new Set(techNames)];
+  state.myTechName = state.techIdentities[0] || '';
+  // ชื่อของผู้ล็อกอินเอง (จากตอนขอสิทธิ์ หรือชื่อช่างถ้าไม่มี) ไว้เติมช่อง "ชื่อผู้แจ้ง" ให้อัตโนมัติ
+  // จะได้ไม่ต้องพิมพ์ชื่อตัวเองซ้ำทุกครั้งที่แจ้งซ่อม
+  state.myName = (mine && mine.name) || state.techIdentities[0] || '';
+  applyMyNameToForm();
+  if(state.allowedRoles.length){
+    state.role = state.allowedRoles[0];
+    state.authStatus = 'ok';
+  } else if(mine && mine.status === 'pending'){
+    state.authStatus = 'pending';
+  } else if(mine && mine.status === 'rejected'){
+    state.authStatus = 'rejected';
+  } else {
+    state.authStatus = 'guest';
+  }
+}
+async function authenticate(){
+  state.deviceId = getDeviceId();
+  state.didHash = await sha256Hex(state.deviceId);
+  // ไม่รอโหลด config (ต้องอ่านชีตแผนก/เครื่องจักร/ช่างสด 3 ชีต ซึ่งช้าที่สุดในบรรดา doGet ทั้งหมด)
+  // ก่อนเช็คสิทธิ์ — resolveAccess() ไม่ได้ใช้ config เลย ปล่อยให้ loadEssential() โหลด config
+  // แยกไปเบื้องหลังทีหลัง (ฟอร์ม/หน้าจอที่ยังไม่มีสิทธิ์ใช้ค่า default ของ state.config ไปพลางก่อนได้)
+  // เพื่อให้ผู้ใช้เห็นหน้า "ขอสิทธิ์เข้าใช้งาน" ไวที่สุด แทนที่จะรอ 2 รอบเครือข่ายซ้อนกัน
+  await resolveAccess();
+}
+/* ระหว่างรอผู้ดูแลอนุมัติ ให้เช็คสิทธิ์ซ้ำเป็นระยะ พออนุมัติแล้วจะเข้าระบบให้เองโดยผู้ใช้ไม่ต้องทำอะไร */
+async function recheckAccess(){
+  if(state.authStatus === 'ok') return;
+  const before = state.authStatus;
+  await resolveAccess();
+  if(state.authStatus === 'ok'){ location.reload(); return; }
+  if(state.authStatus !== before) render();
+}
+/* เขียนรายการคำขอแบบดึงของล่าสุดมาก่อนเสมอ ลดโอกาสที่สองคนกดพร้อมกันแล้วทับกันเอง */
+async function saveAccessRequests(mutate){
+  const latest = await storeGet('accessRequests');
+  const list = (Array.isArray(latest) ? latest : state.accessRequests).slice();
+  const next = mutate(list);
+  if(!next) return false;
+  const ok = await storeSet('accessRequests', next);
+  if(ok) state.accessRequests = next;
+  return ok;
+}
+// เดารุ่นเบราว์เซอร์/อุปกรณ์แบบคร่าวๆ จาก user agent — แค่ไว้ให้ admin แยกแถวที่ชื่อซ้ำกัน
+// (เช่น คนเดียวกันขอผ่านมือถือ 1 ครั้ง คอม 1 ครั้ง) ไม่ใช่ตัวระบุตัวตนที่แม่นยำ และไม่กระทบความ
+// ปลอดภัยของ didHash เลย เพราะ user agent เป็นข้อมูลสาธารณะที่เบราว์เซอร์ส่งให้ทุกเว็บอยู่แล้ว
+function deviceLabel(){
+  const ua = navigator.userAgent || '';
+  let os = '';
+  if(/iPhone|iPad|iPod/.test(ua)) os = 'iPhone/iPad';
+  else if(/Android/.test(ua)) os = 'Android';
+  else if(/Windows/.test(ua)) os = 'Windows';
+  else if(/Macintosh/.test(ua)) os = 'Mac';
+  else if(/Linux/.test(ua)) os = 'Linux';
+  let browser = '';
+  if(/Line\//.test(ua)) browser = 'LINE in-app';
+  else if(/EdgiOS|Edg\//.test(ua)) browser = 'Edge';
+  else if(/CriOS|Chrome\//.test(ua)) browser = 'Chrome';
+  else if(/FxiOS|Firefox\//.test(ua)) browser = 'Firefox';
+  else if(/Safari\//.test(ua) && !/Chrome/.test(ua)) browser = 'Safari';
+  return [browser, os].filter(Boolean).join(' · ') || 'ไม่ทราบอุปกรณ์';
+}
+async function submitAccessRequest(){
+  const u = state.ui;
+  const name = (u.reqName || '').trim();
+  if(!name){ toast('กรุณากรอกชื่อ-นามสกุล', true); return; }
+  if(!ROLES[u.reqRole] || u.reqRole === 'admin'){ toast('กรุณาเลือกบทบาทที่ต้องการ', true); return; }
+  if(u.reqRole === 'tech' && !u.reqTechName){ toast('กรุณาเลือกชื่อช่างของท่าน', true); return; }
+  if(!state.didHash){ toast('เบราว์เซอร์นี้ไม่รองรับการขอสิทธิ์ กรุณาใช้เบราว์เซอร์อื่น', true); return; }
+  const entry = {
+    id: uid(), didHash: state.didHash, name,
+    device: deviceLabel(),
+    dept: u.reqDept || '',
+    requestedRole: u.reqRole,
+    requestedTechName: u.reqRole === 'tech' ? u.reqTechName : '',
+    note: (u.reqNote || '').trim(),
+    roles: [], techName: '', status: 'pending',
+    at: nowIso(), decidedAt: '', decidedBy: '',
+  };
+  u.reqSending = true; render();
+  const ok = await saveAccessRequests(list => {
+    const idx = list.findIndex(r => r.didHash === state.didHash);
+    if(idx >= 0) list[idx] = entry; else list.push(entry);
+    return list;
+  });
+  u.reqSending = false;
+  if(!ok){ toast('ส่งคำขอไม่สำเร็จ กรุณาลองใหม่', true); render(); return; }
+  state.myRequest = entry;
+  state.authStatus = 'pending';
+  render();
+  toast('ส่งคำขอเรียบร้อย รอผู้ดูแลอนุมัติ');
+  // ต้องรอ config (lineWebhooks) โหลดให้เสร็จก่อนแจ้งเตือน — ตอนนี้หน้าขอสิทธิ์โชว์ได้ก่อน config
+  // จะโหลดเสร็จ ถ้าผู้ใช้กดส่งไวมากอาจจะยังไม่มี URL webhook ให้ยิง ไม่งั้น admin จะไม่ได้รับแจ้งเตือนเงียบๆ
+  await ensureEssentialLoaded();
+  await tryLineWebhook('admin',
+    `🔐 มีคำขอสิทธิ์เข้าใช้งานใหม่\n` +
+    `ชื่อ: ${name}\n` +
+    `แผนก: ${entry.dept || '-'}\n` +
+    `บทบาทที่ขอ: ${ROLES[entry.requestedRole].label}` +
+    (entry.requestedTechName ? `\nชื่อช่าง: ${entry.requestedTechName}` : '') +
+    (entry.note ? `\nหมายเหตุ: ${entry.note}` : '') +
+    `\n\nกดอนุมัติได้ที่หน้า "ตั้งค่าข้อมูลหลัก" → คำขอสิทธิ์เข้าใช้งาน\n${accessRequestsDeepLink()}`);
+}
+async function cancelMyAccessRequest(){
+  const ok = await saveAccessRequests(list => list.filter(r => r.didHash !== state.didHash));
+  if(!ok){ toast('ยกเลิกคำขอไม่สำเร็จ', true); return; }
+  const mine = state.myRequest;
+  if(mine){
+    state.ui.reqName = mine.name || '';
+    state.ui.reqDept = mine.dept || '';
+    state.ui.reqRole = mine.requestedRole || 'requester';
+    state.ui.reqTechName = mine.requestedTechName || '';
+    state.ui.reqNote = mine.note || '';
+  }
+  state.myRequest = null;
+  state.authStatus = 'guest';
+  render();
+}
+async function approveAccessRequest(id){
+  const req = state.accessRequests.find(r => r.id === id);
+  if(!req) return;
+  const roles = (state.ui.grantRole[id] && state.ui.grantRole[id].length) ? state.ui.grantRole[id] : [req.requestedRole];
+  if(!roles.length || !roles.every(r => ROLES[r])){ toast('กรุณาเลือกบทบาทอย่างน้อย 1 บทบาท', true); return; }
+  // บทบาท tech ต้องผูกกับชื่อช่างที่ตรงกับชีต "ช่าง" เป๊ะๆ ไม่งั้นจะไม่เห็นปุ่มเริ่ม/จบงานของตัวเอง
+  const techName = roles.includes('tech') ? (state.ui.grantTechName[id] || req.requestedTechName || '') : '';
+  if(roles.includes('tech') && !techName){ toast('กรุณาเลือกชื่อช่างให้ตรงกับรายชื่อในชีต "ช่าง"', true); return; }
+  const lineUserId = (state.ui.grantLineUserId[id] || req.lineUserId || '').trim();
+  const ok = await saveAccessRequests(list => {
+    const t = list.find(r => r.id === id);
+    if(!t) return null;
+    t.status = 'approved'; t.roles = roles; t.techName = techName; t.lineUserId = lineUserId;
+    t.decidedAt = nowIso();
+    t.decidedBy = ROLES[state.role] ? ROLES[state.role].label : 'ผู้ดูแลระบบ';
+    return list;
+  });
+  if(!ok){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  toast(`อนุมัติ ${req.name} เป็น "${roles.map(r => ROLES[r].label).join(', ')}" แล้ว`);
+  if(lineUserId){
+    await sendLineToUserIds([lineUserId],
+      `✅ คำขอสิทธิ์เข้าใช้งานของคุณได้รับอนุมัติแล้ว เป็น "${roles.map(r => ROLES[r].label).join(', ')}"\nเข้าใช้งานได้ทันทีที่ ${APP_URL}`);
+  }
+  render();
+}
+async function rejectAccessRequest(id){
+  const req = state.accessRequests.find(r => r.id === id);
+  if(!req) return;
+  if(!confirm(`ปฏิเสธคำขอสิทธิ์ของ "${req.name}" ?`)) return;
+  const ok = await saveAccessRequests(list => {
+    const t = list.find(r => r.id === id);
+    if(!t) return null;
+    t.status = 'rejected'; t.roles = []; t.techName = '';
+    t.decidedAt = nowIso();
+    t.decidedBy = ROLES[state.role] ? ROLES[state.role].label : 'ผู้ดูแลระบบ';
+    return list;
+  });
+  if(!ok){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  toast('ปฏิเสธคำขอแล้ว');
+  render();
+}
+function startEditAccessRoles(id){
+  const req = state.accessRequests.find(r => r.id === id);
+  if(!req) return;
+  state.ui.editingAccessId = id;
+  state.ui.editRole[id] = (req.roles || []).slice();
+  state.ui.editTechName[id] = req.techName || '';
+  render();
+}
+function cancelEditAccessRoles(){ state.ui.editingAccessId = null; render(); }
+function toggleEditRole(id, role, checked){
+  const cur = state.ui.editRole[id] || [];
+  state.ui.editRole[id] = checked ? [...new Set([...cur, role])] : cur.filter(r => r !== role);
+  render();
+}
+async function saveAccessRoles(id){
+  const req = state.accessRequests.find(r => r.id === id);
+  if(!req) return;
+  const roles = state.ui.editRole[id] || [];
+  if(!roles.length || !roles.every(r => ROLES[r])){ toast('กรุณาเลือกบทบาทอย่างน้อย 1 บทบาท', true); return; }
+  const techName = roles.includes('tech') ? (state.ui.editTechName[id] || '') : '';
+  if(roles.includes('tech') && !techName){ toast('กรุณาเลือกชื่อช่างให้ตรงกับรายชื่อในชีต "ช่าง"', true); return; }
+  const ok = await saveAccessRequests(list => {
+    const t = list.find(r => r.id === id);
+    if(!t) return null;
+    t.roles = roles; t.techName = techName;
+    return list;
+  });
+  if(!ok){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  state.ui.editingAccessId = null;
+  toast(`บันทึกบทบาทของ ${req.name} แล้ว`);
+  render();
+}
+async function revokeAccessRequest(id){
+  const req = state.accessRequests.find(r => r.id === id);
+  if(!req) return;
+  if(!confirm(`ถอนสิทธิ์และลบรายการของ "${req.name}" ?\n\nผู้ใช้รายนี้จะกลับไปอยู่ในสถานะยังไม่มีสิทธิ์ และขอสิทธิ์ใหม่ได้`)) return;
+  const ok = await saveAccessRequests(list => list.filter(r => r.id !== id));
+  if(!ok){ toast('ลบไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  toast('ลบรายการแล้ว');
+  render();
+}
+async function copyText(text, okMsg){
+  try{
+    await navigator.clipboard.writeText(text);
+    toast(okMsg || 'คัดลอกแล้ว');
+  }catch(e){
+    // สำรองสำหรับเบราว์เซอร์/บริบทที่ยังไม่รองรับ Clipboard API
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); toast(okMsg || 'คัดลอกแล้ว'); }
+    catch(e2){ toast('คัดลอกไม่สำเร็จ กรุณาคัดลอกด้วยตัวเอง', true); }
+    ta.remove();
+  }
+}
+async function storeSet(key, val){
+  try{
+    const res = await fetch(API_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ key, value: JSON.stringify(val) })
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    return true;
+  }catch(e){ console.error('storage set failed', key, e); return false; }
+}
+
+/* โหลดเฉพาะข้อมูลที่จำเป็นต่อการใช้งานหน้าแรก (ฟอร์ม "ใบคำร้อง/ใบแจ้งซ่อม") ให้เร็วที่สุด — แผนก/
+   เครื่องจักร/ช่างอยู่ใน config เท่านั้น ส่วน orders/notifications/counters (ก้อนใหญ่ โตขึ้นเรื่อยๆ
+   ตามประวัติ) กับข้อมูลหน้าตั้งค่า (lineUsers ฯลฯ ใช้แค่ admin) เลื่อนไปโหลดทีหลังแยกต่างหาก */
+let essentialLoadPromise = null;
+// เรียก loadEssential() ครั้งเดียวไม่ว่าจะถูกเรียกจากกี่จุด — คืน promise เดิมถ้ากำลังโหลดอยู่แล้ว/โหลดเสร็จแล้ว
+// กันไม่ให้ยิง storeGet('config') ซ้ำซ้อน (เช่นตอน submitAccessRequest ต้องรอ lineWebhooks ให้พร้อมก่อนแจ้งเตือน)
+function ensureEssentialLoaded(){
+  if(!essentialLoadPromise) essentialLoadPromise = loadEssential();
+  return essentialLoadPromise;
+}
+async function loadEssential(){
+  const cfg = await storeGet('config');
+  state.config = cfg || state.config;
+  if(!state.config.lineWebhooks) state.config.lineWebhooks = {};
+  state.loaded = true;
+  // เขียน config เริ่มต้นกลับไปเฉพาะตอนเซิร์ฟเวอร์ตอบว่า "ยังไม่มี config เลยจริงๆ" (cfg === null)
+  // ห้ามเขียนทับตอนแค่ดึงข้อมูลไม่สำเร็จ (cfg === undefined เช่น deploy ใหม่ยังไม่พร้อม/เน็ตหลุด)
+  // มิฉะนั้นจะเผลอเขียนทับ config จริงบนเซิร์ฟเวอร์ (เช่น lineWebhooks ที่ตั้งไว้) ด้วยค่า default ว่างๆ
+  // ชั้นป้องกันเพิ่ม: ให้เขียนได้เฉพาะ admin และต้องกดยืนยันก่อนเสมอ ห้าม auto-write เงียบๆ
+  // อีกต่อไป — บทบาทอื่นข้ามไปเฉยๆ (ใช้ default ในเครื่องสำหรับ session นี้พอ ไม่ persist)
+  if(cfg === null){
+    if(state.role === 'admin' && confirm('เซิร์ฟเวอร์ยังไม่มีข้อมูลตั้งค่า (config) เลย — ต้องการเริ่มต้นค่าเริ่มต้นใหม่หรือไม่?\n\nกด "ยกเลิก" หากไม่แน่ใจ เพื่อป้องกันการเขียนทับข้อมูลเดิม (เช่น LINE Webhook) โดยไม่ตั้งใจ')){
+      await storeSet('config', state.config);
+    } else {
+      console.warn('ข้าม auto-seed config เริ่มต้น (ยังไม่ยืนยัน หรือไม่ใช่ admin)');
+    }
+  }
+}
+/* ก้อนข้อมูลใหญ่/โตเรื่อยๆ — โหลดคู่ขนานไปเบื้องหลังหลังหน้าจอแรกโชว์แล้ว ไม่บล็อกผู้ใช้
+   (ปุ่มที่ต้องเขียนกลับ orders ทุกปุ่มเช็ค state.ordersLoaded ก่อนเสมอ ดู persistOrders()) */
+async function loadBackground(){
+  const [counters, orders, notifs] = await Promise.all([
+    storeGet('counters'), storeGet('orders'), storeGet('notifications')
+  ]);
+  state.counters = counters || {};
+  // ถ้าเปิดจากลิงก์แจ้งเตือนมาก่อน state.orders อาจมีใบที่ peek มาใบเดียวอยู่แล้ว — รายการเต็มที่โหลด
+  // มาตอนนี้ถูกต้องกว่าเสมอ แทนที่ตรงๆ ได้เลย
+  state.orders = orders || [];
+  state.notifications = notifs || [];
+  state.ordersLoaded = true;
+  render();
+}
+/* ข้อมูลเฉพาะหน้า "ตั้งค่าข้อมูลหลัก" ของ admin — คนอื่นไม่เคยต้องใช้เลย จึงโหลดแบบขี้เกียจ (lazy)
+   แค่ตอน admin เข้าหน้านี้จริงๆ (เรียกจาก setView) ไม่ต้องรวมอยู่ใน initial load ของทุกคน */
+async function ensureLineDataLoaded(){
+  if(state.lineDataLoaded) return;
+  const [lineUsers, lineUserRoles, lineRecipients] = await Promise.all([
+    storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')
+  ]);
+  state.lineUsers = Array.isArray(lineUsers) ? lineUsers : [];
+  state.lineUserRoles = (lineUserRoles && typeof lineUserRoles === 'object') ? lineUserRoles : {};
+  state.lineRecipients = Array.isArray(lineRecipients) ? lineRecipients : [];
+  state.lineDataLoaded = true;
+  render();
+}
+
+/* ============================= UTIL ============================= */
+function uid(){ return (crypto.randomUUID ? crypto.randomUUID() : 'id-'+Date.now()+'-'+Math.random().toString(16).slice(2)); }
+// รองรับข้อมูลเก่าที่ยังเป็น assignment.technician (string เดี่ยว) ก่อนเปลี่ยนเป็น technicians (array)
+function assignedTechs(o){
+  if(o.assignment.technicians && o.assignment.technicians.length) return o.assignment.technicians;
+  if(o.assignment.technician) return [o.assignment.technician];
+  return [];
+}
+function nowIso(){ return new Date().toISOString(); }
+function fmtDateTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString('th-TH', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+function fmtDate(dstr){
+  if(!dstr) return '-';
+  const d = new Date(dstr+'T00:00:00');
+  return d.toLocaleDateString('th-TH', { day:'2-digit', month:'2-digit', year:'2-digit' });
+}
+function yyNow(){ return String(new Date().getFullYear() % 100).padStart(2,'0'); }
+function previewDocNumber(deptCode){
+  if(!deptCode) return 'xx---/'+yyNow();
+  const yy = yyNow();
+  const last = (state.counters[deptCode] && state.counters[deptCode][yy]) || 0;
+  return deptCode + String(last+1).padStart(3,'0') + '/' + yy;
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function toast(msg, isErr){
+  const wrap = document.getElementById('toastWrap');
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err':'');
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 2600);
+}
+/* หา LINE userId ของผู้รับสำหรับบทบาทหนึ่งๆ จากตารางที่ admin กำหนดไว้ในหน้าตั้งค่า
+   รองรับทั้งบทบาทของระบบ (fm/gm/maint/tech/requester/admin) และ "ชื่อช่าง" ที่ใช้ยิงปิงส่วนตัว */
+function lineRecipientsForRole(role){
+  const map = state.lineUserRoles || {};
+  return Object.keys(map).filter(userId => {
+    const m = map[userId] || {};
+    return (m.roles || []).includes(role) || (m.techName && m.techName === role);
+  });
+}
+async function sendLineToUserIds(userIds, message){
+  if(!userIds || !userIds.length) return;
+  const hooks = state.config.lineWebhooks || {};
+  const url = Object.values(hooks).find(Boolean);
+  if(!url) return;
+  try{
+    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ userIds, message, at: nowIso() }) });
+  }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
+}
+async function tryLineWebhook(role, message){
+  const hooks = state.config.lineWebhooks || {};
+  const url = hooks[role] || Object.values(hooks).find(Boolean);
+  if(!url) return;
+  // ส่ง userIds ไปด้วยเพื่อให้สคริปต์ LINE relay ยิงตรงถึงคนที่ admin กำหนดไว้ได้
+  // (ถ้า relay เวอร์ชันเก่ายังไม่รองรับฟิลด์นี้ ก็จะถูกมองข้ามไปเฉยๆ พฤติกรรมเดิมไม่เปลี่ยน)
+  const userIds = lineRecipientsForRole(role);
+  try{
+    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ role, message, userIds, at: nowIso() }) });
+  }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
+}
+
+/* ============================= NOTIFICATIONS ============================= */
+// ลิงก์ลึกไปหน้า "ตั้งค่าข้อมูลหลัก" (ส่วนคำขอสิทธิ์เข้าใช้งานอยู่บนสุดของหน้านั้นพอดี) —
+// ใช้กลไกเดียวกับ orderDeepLink ด้านล่าง (?role=...&view=...) ดู init() ที่ท้ายไฟล์
+function accessRequestsDeepLink(){
+  return `${APP_URL}?role=admin&view=settings`;
+}
+function orderDeepLink(orderId, role){
+  return `${APP_URL}?order=${encodeURIComponent(orderId)}&role=${encodeURIComponent(role)}`;
+}
+async function pushNotification(toRole, orderId, docNumber, message){
+  const n = { id: uid(), toRole, orderId, docNumber, message, createdAt: nowIso(), read:false };
+  state.notifications.unshift(n);
+  await storeSet('notifications', state.notifications);
+  await tryLineWebhook(toRole, `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`);
+}
+function unreadCountForRole(role){
+  if(role === 'admin') return state.notifications.filter(n => !n.read).length;
+  return state.notifications.filter(n => n.toRole === role && !n.read).length;
+}
+
+/* ============================= PHOTO HANDLING ============================= */
+function resizeImageFile(file, maxW){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function handlePhotoInput(files){
+  const remaining = 5 - state.form.photos.length;
+  if(remaining <= 0){ toast('แนบรูปได้สูงสุด 5 รูปต่อใบแจ้งซ่อม', true); return; }
+  const list = Array.from(files).slice(0, remaining);
+  for(const f of list){
+    if(!f.type.startsWith('image/')) continue;
+    try{
+      const dataUrl = await resizeImageFile(f, 900);
+      state.form.photos.push(dataUrl);
+    }catch(e){ console.error(e); }
+  }
+  render();
+}
+
+/* ============================= FORM ACTIONS ============================= */
+function selectDept(code){
+  state.form.dept = code;
+  state.form.machineCode = ''; state.form.machineName=''; state.form.machineSearch='';
+  render();
+}
+function updateFormField(field, value){
+  state.form[field] = value;
+  if(field === 'machineSearch'){ state.showMachineDropdown = true; }
+  render();
+}
+function pickMachine(code, name){
+  state.form.machineCode = code; state.form.machineName = name; state.form.machineSearch=''; state.showMachineDropdown=false;
+  render();
+}
+function clearMachine(){
+  state.form.machineCode=''; state.form.machineName=''; render();
+}
+function removePhoto(idx){
+  state.form.photos.splice(idx,1); render();
+}
+
+async function submitOrder(){
+  const f = state.form;
+  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
+  if(!f.dept){ toast('กรุณาเลือกแผนก', true); return; }
+  if(!f.docType){ toast('กรุณาเลือกประเภทเอกสาร', true); return; }
+  if(!f.machineCode){ toast('กรุณาเลือกรหัสเครื่องจักร', true); return; }
+  if(!f.cause || !f.cause.trim()){ toast('กรุณาระบุอาการ/สาเหตุที่ต้องการแจ้งซ่อม', true); return; }
+  if(!f.neededDate){ toast('กรุณาระบุวันที่ต้องการใช้งาน', true); return; }
+  if(!f.requestedBy || !f.requestedBy.trim()){ toast('กรุณาระบุชื่อผู้แจ้ง', true); return; }
+
+  // re-fetch counters right before incrementing to reduce race window
+  const freshCounters = await storeGet('counters');
+  const counters = freshCounters || state.counters;
+  const yy = yyNow();
+  const deptCounters = { ...(counters[f.dept] || {}) };
+  const next = (deptCounters[yy] || 0) + 1;
+  deptCounters[yy] = next;
+  const newCounters = { ...counters, [f.dept]: deptCounters };
+  const docNumber = f.dept + String(next).padStart(3,'0') + '/' + yy;
+
+  const id = uid();
+  const order = {
+    id, docNumber, department: f.dept, docType: f.docType, machineCode: f.machineCode, machineName: f.machineName,
+    cause: f.cause.trim(), neededDate: f.neededDate, requestedBy: f.requestedBy.trim(),
+    createdAt: nowIso(), status: 'PENDING_FM', photoCount: f.photos.length,
+    approvals: { fm:{status:null,by:'',at:'',note:''}, gm:{status:null,by:'',at:'',note:''} },
+    assignment: { technicians:[], assignedBy:'', assignedAt:'', startDate:'', endDate:'', executionPlan:'', receivedByName:'' },
+    maintRecord: null,
+    verification: null,
+    verificationHistory: [],
+    statusHistory: [{ status:'PENDING_FM', at: nowIso(), note:'สร้างใบแจ้งซ่อม โดย ' + f.requestedBy.trim() }],
+  };
+  const newOrders = [order, ...state.orders];
+
+  // เขียน "orders" ก่อน — นี่คือข้อมูลตัวจริงของใบแจ้งซ่อม ต้องสำเร็จก่อนถึงจะถือว่าส่งคำร้องได้จริง
+  // ห้ามอัปเดต state.orders/แสดงข้อความสำเร็จถ้า storeSet ล้มเหลว (เช่น deploy สิทธิ์ผิด, เน็ตหลุด)
+  // มิฉะนั้นผู้ใช้จะเห็นว่า "ส่งเรียบร้อย" ทั้งที่ข้อมูลไม่เข้าชีตจริง
+  const ordersOk = await storeSet('orders', newOrders);
+  if(!ordersOk){
+    toast('ส่งใบแจ้งซ่อมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    return;
+  }
+  state.orders = newOrders;
+  state.counters = newCounters;
+  storeSet('counters', newCounters); // best-effort, ไม่บล็อกเพราะใบแจ้งซ่อมถูกบันทึกแล้ว
+  if(f.photos.length){
+    const photosOk = await storeSet('photos:'+id, f.photos);
+    if(!photosOk) toast('บันทึกรูปภาพแนบไม่สำเร็จ แต่ใบแจ้งซ่อมถูกบันทึกแล้ว', true);
+  }
+
+  await pushNotification('fm', id, docNumber, `มีใบแจ้งซ่อมใหม่จากแผนก ${f.dept} รอการอนุมัติของท่าน`);
+
+  state.form = emptyForm();
+  applyMyNameToForm();
+  toast(`ส่งใบแจ้งซ่อมเรียบร้อย เลขที่เอกสาร ${docNumber}`);
+  state.view = 'list';
+  render();
+}
+
+/* ============================= ORDER ACTIONS ============================= */
+function filteredMachines(){
+  const dept = state.form.dept;
+  if(!dept) return [];
+  const q = (state.form.machineSearch||'').trim().toLowerCase();
+  return state.config.machines.filter(m => m.dept === dept &&
+    (!q || m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)));
+}
+
+async function openDetail(id){
+  state.selectedOrderId = id;
+  state.view = 'detail';
+  state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote='';
+  const photos = await storeGet('photos:'+id);
+  state.detailPhotos = photos || [];
+  // mark related notifications read for current role (admin: all roles' notifications for this order)
+  let changed = false;
+  state.notifications.forEach(n => { if(n.orderId === id && (state.role === 'admin' || n.toRole === state.role) && !n.read){ n.read = true; changed = true; } });
+  if(changed) await storeSet('notifications', state.notifications);
+  render();
+}
+function backToList(){ state.view='list'; state.selectedOrderId=null; render(); }
+function getOrder(id){ return state.orders.find(o => o.id === id); }
+
+// เผื่อ state.orders ยังเป็นแค่ใบเดียวที่ขอมาแบบด่วนตอนเปิดจากลิงก์แจ้งเตือน (ยังไม่ใช่รายการเต็ม) —
+// ห้ามเขียนทับ "orders" บนเซิร์ฟเวอร์ด้วยรายการที่ไม่ครบ ไม่งั้นใบอื่นๆ ที่ยังไม่ถูกโหลดมาจะหายไปหมด
+async function persistOrders(){
+  if(!state.ordersLoaded){ console.warn('persistOrders skipped — orders not fully loaded yet'); return false; }
+  return await storeSet('orders', state.orders);
+}
+
+function openActionBox(id, type){
+  state.ui.actionFor = id; state.ui.actionType = type; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  render();
+}
+function closeActionBox(){
+  state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  render();
+}
+async function handleResubmitPhotoInput(files){
+  const remaining = 5 - state.ui.resubmitPhotos.length;
+  if(remaining <= 0){ toast('แนบรูปได้สูงสุด 5 รูปต่อครั้ง', true); return; }
+  const list = Array.from(files).slice(0, remaining);
+  for(const f of list){
+    if(!f.type.startsWith('image/')) continue;
+    try{
+      const dataUrl = await resizeImageFile(f, 900);
+      state.ui.resubmitPhotos.push(dataUrl);
+    }catch(e){ console.error(e); }
+  }
+  render();
+}
+function removeResubmitPhoto(idx){
+  state.ui.resubmitPhotos.splice(idx,1); render();
+}
+// อิงจากสถานะใบแจ้งซ่อม (ไม่ใช่ state.role ตรงๆ) เพื่อให้ admin ซึ่งผ่าน hasRole() ได้ทุกบทบาท
+// พร้อมกัน ยังคงรันฟังก์ชันที่ถูกต้องตรงกับกล่องการทำงานที่กำลังเปิดอยู่จริง
+function confirmAction(id){
+  const o = getOrder(id); if(!o) return;
+  const type = state.ui.actionType;
+  const note = state.ui.actionNote.trim();
+  if(type !== 'approve' && type !== 'verify_pass' && !note){ toast('กรุณาระบุหมายเหตุ', true); return; }
+  if(o.status === 'PENDING_FM'){
+    if(type==='approve') approveFm(id, note);
+    else if(type==='reject') rejectFm(id, note);
+    else if(type==='needinfo') needInfoFm(id, note);
+  } else if(o.status === 'PENDING_GM'){
+    if(type==='approve') approveGm(id, note);
+    else if(type==='reject') rejectGm(id, note);
+    else if(type==='needinfo') needInfoGm(id, note);
+  } else if((o.status === 'NEEDS_INFO_FM' || o.status === 'NEEDS_INFO_GM') && type === 'resubmit'){
+    resubmitInfo(id, note);
+  } else if(o.status === 'PENDING_VERIFY' && (type === 'verify_pass' || type === 'verify_fail')){
+    verifyRepair(id, type, note);
+  }
+}
+async function approveFm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const n = (note||'').trim();
+  o.approvals.fm = { status:'approved', by: ROLES.fm.label, at: nowIso(), note: n };
+  o.status = 'PENDING_GM';
+  o.statusHistory.push({ status:'PENDING_GM', at: nowIso(), note:'ผู้จัดการโรงงานอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
+  await persistOrders();
+  await pushNotification('gm', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอการอนุมัติของท่าน`);
+  toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการทั่วไป');
+  closeActionBox();
+}
+async function rejectFm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const reason = (note||'').trim() || 'ไม่ระบุเหตุผล';
+  o.approvals.fm = { status:'rejected', by: ROLES.fm.label, at: nowIso(), note: reason };
+  o.status = 'REJECTED';
+  o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการโรงงานไม่อนุมัติ: ' + reason });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการโรงงาน (${reason})`);
+  toast('บันทึกการไม่อนุมัติแล้ว');
+  closeActionBox();
+}
+async function needInfoFm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const msg = (note||'').trim();
+  o.status = 'NEEDS_INFO_FM';
+  o.statusHistory.push({ status:'NEEDS_INFO_FM', at: nowIso(), note:'ผู้จัดการโรงงานขอข้อมูลเพิ่มเติม: ' + msg });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `ผู้จัดการโรงงานต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
+  toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
+  closeActionBox();
+}
+async function approveGm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const n = (note||'').trim();
+  o.approvals.gm = { status:'approved', by: ROLES.gm.label, at: nowIso(), note: n };
+  o.status = 'PENDING_ASSIGN';
+  o.statusHistory.push({ status:'PENDING_ASSIGN', at: nowIso(), note:'ผู้จัดการทั่วไปอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
+  await persistOrders();
+  await pushNotification('maint', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติครบแล้ว กรุณามอบหมายช่างผู้รับผิดชอบ`);
+  toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการแผนกซ่อมบำรุง');
+  closeActionBox();
+}
+async function rejectGm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const reason = (note||'').trim() || 'ไม่ระบุเหตุผล';
+  o.approvals.gm = { status:'rejected', by: ROLES.gm.label, at: nowIso(), note: reason };
+  o.status = 'REJECTED';
+  o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการทั่วไปไม่อนุมัติ: ' + reason });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการทั่วไป (${reason})`);
+  toast('บันทึกการไม่อนุมัติแล้ว');
+  closeActionBox();
+}
+async function needInfoGm(id, note){
+  const o = getOrder(id); if(!o) return;
+  const msg = (note||'').trim();
+  o.status = 'NEEDS_INFO_GM';
+  o.statusHistory.push({ status:'NEEDS_INFO_GM', at: nowIso(), note:'ผู้จัดการทั่วไปขอข้อมูลเพิ่มเติม: ' + msg });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `ผู้จัดการทั่วไปต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
+  toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
+  closeActionBox();
+}
+async function resubmitInfo(id, note){
+  const o = getOrder(id); if(!o) return;
+  const msg = (note||'').trim();
+  const newPhotos = state.ui.resubmitPhotos || [];
+  const backTo = o.status === 'NEEDS_INFO_FM' ? 'PENDING_FM' : 'PENDING_GM';
+  o.status = backTo;
+  o.statusHistory.push({ status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + msg + (newPhotos.length ? ` (แนบรูปเพิ่ม ${newPhotos.length} รูป)` : '') });
+  if(newPhotos.length){
+    const existing = (await storeGet('photos:'+id)) || [];
+    const merged = existing.concat(newPhotos);
+    await storeSet('photos:'+id, merged);
+    o.photoCount = merged.length;
+    if(state.selectedOrderId === id) state.detailPhotos = merged;
+  }
+  await persistOrders();
+  await pushNotification(backTo==='PENDING_FM' ? 'fm' : 'gm', id, o.docNumber, `ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมแผนก ${o.department} แล้ว กรุณาตรวจสอบอีกครั้ง`);
+  toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
+  closeActionBox();
+}
+function addAssignTechRow(){ state.ui.assignTechs.push(''); render(); }
+function removeAssignTechRow(i){ state.ui.assignTechs.splice(i,1); render(); }
+function setAssignTech(i, v){ state.ui.assignTechs[i] = v; }
+async function assignTechnician(id){
+  const o = getOrder(id); if(!o) return;
+  const techs = [...new Set(state.ui.assignTechs.filter(Boolean))];
+  const startDate = state.ui.assignStartDate;
+  const endDate = state.ui.assignEndDate;
+  const receivedBy = (state.ui.assignReceivedBy||'').trim();
+  const executionPlan = state.ui.assignExecutionPlan;
+  if(!receivedBy){ toast('กรุณาระบุชื่อผู้จัดการที่รับใบแจ้งซ่อม', true); return; }
+  if(!startDate || !endDate){ toast('กรุณากำหนดวันเริ่มงานและวันที่คาดว่าจะเสร็จก่อนมอบหมายงาน', true); return; }
+  if(endDate < startDate){ toast('วันที่คาดว่าจะเสร็จต้องไม่ก่อนวันเริ่มงาน', true); return; }
+  if(!techs.length){ toast('กรุณาเลือกชื่อช่างผู้รับผิดชอบอย่างน้อย 1 คน', true); return; }
+  if(!executionPlan){ toast('กรุณาเลือกการดำเนินงาน', true); return; }
+  o.assignment = { technicians: techs, assignedBy: ROLES.maint.label, assignedAt: nowIso(), startDate, endDate, executionPlan, receivedByName: receivedBy };
+  o.status = 'ASSIGNED';
+  o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:`รับใบแจ้งซ่อมโดย ${receivedBy} — มอบหมายงานให้ ${techs.join(', ')} (กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}) — การดำเนินงาน: ${EXECUTION_PLAN_META[executionPlan]}` });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`);
+  for(const tech of techs){
+    await tryLineWebhook(tech, `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
+  }
+  state.ui.assignTechs = [''];
+  state.ui.assignStartDate = '';
+  state.ui.assignEndDate = '';
+  state.ui.assignReceivedBy = '';
+  state.ui.assignExecutionPlan = '';
+  toast('มอบหมายงานเรียบร้อย');
+  render();
+}
+
+/* ============================= MAINTENANCE RECORD (ผจก.แผนกซ่อมบำรุง) ============================= */
+function openMaintRecord(id){
+  const o = getOrder(id); if(!o) return;
+  const mr = o.maintRecord;
+  state.ui.maintRecordFor = id;
+  state.ui.maintRecordCause = mr ? mr.causeAnalysis : '';
+  state.ui.maintRecordOpinion = mr ? mr.inspectorOpinion : '';
+  state.ui.maintRecordParts = (mr && mr.parts && mr.parts.length) ? mr.parts.map(p=>({...p})) : [emptyPartRow()];
+  render();
+}
+function closeMaintRecord(){
+  state.ui.maintRecordFor = null; state.ui.maintRecordCause=''; state.ui.maintRecordOpinion='';
+  state.ui.maintRecordParts = [emptyPartRow()];
+  render();
+}
+function addMaintPartRow(){ state.ui.maintRecordParts.push(emptyPartRow()); render(); }
+function removeMaintPartRow(i){ state.ui.maintRecordParts.splice(i,1); render(); }
+function setMaintPart(i, field, v){ state.ui.maintRecordParts[i][field] = v; }
+async function saveMaintRecord(id){
+  const o = getOrder(id); if(!o) return;
+  const cause = state.ui.maintRecordCause.trim();
+  const opinion = state.ui.maintRecordOpinion;
+  if(!cause){ toast('กรุณาระบุผลการวิเคราะห์สาเหตุ/อาการที่ชำรุด', true); return; }
+  if(!opinion){ toast('กรุณาเลือกความคิดเห็นของช่างผู้ตรวจสอบ', true); return; }
+  const parts = state.ui.maintRecordParts
+    .filter(p => p.name.trim())
+    .map(p => ({ name:p.name.trim(), qty:p.qty.trim(), unit:p.unit.trim(), price:p.price.trim(), shop:p.shop.trim(), note:p.note.trim() }));
+  o.maintRecord = { causeAnalysis: cause, inspectorOpinion: opinion, parts, updatedBy: ROLES.maint.label, updatedAt: nowIso() };
+  o.statusHistory.push({ status:o.status, at: nowIso(), note:'ผู้จัดการแผนกซ่อมบำรุงบันทึกข้อมูลซ่อมบำรุง (วิเคราะห์สาเหตุ/รายการอะไหล่)' });
+  await persistOrders();
+  toast('บันทึกข้อมูลซ่อมบำรุงเรียบร้อย');
+  closeMaintRecord();
+}
+async function startRepair(id){
+  const o = getOrder(id); if(!o) return;
+  o.status = 'IN_PROGRESS';
+  const techLabel = assignedTechs(o).join(', ') || 'ช่าง';
+  o.statusHistory.push({ status:'IN_PROGRESS', at: nowIso(), note: techLabel + ' เริ่มดำเนินการซ่อม' });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านสถานะ: กำลังซ่อม`);
+  toast('อัปเดตสถานะ: กำลังซ่อม');
+  render();
+}
+async function finishRepair(id){
+  const o = getOrder(id); if(!o) return;
+  o.status = 'PENDING_VERIFY';
+  o.statusHistory.push({ status:'PENDING_VERIFY', at: nowIso(), note:'ซ่อมเสร็จสิ้น รอผู้แจ้งซ่อมตรวจสอบการใช้งาน' });
+  await persistOrders();
+  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`);
+  toast('อัปเดตสถานะ: รอผู้แจ้งตรวจสอบผลการซ่อม');
+  render();
+}
+
+/* ============================= REQUESTER VERIFICATION (ตรวจสอบผลการซ่อม) ============================= */
+async function verifyRepair(id, type, note){
+  const o = getOrder(id); if(!o) return;
+  const n = (note||'').trim();
+  if(type === 'verify_pass'){
+    o.status = 'DONE';
+    o.verification = { result:'pass', by:o.requestedBy, at: nowIso(), note:n };
+    o.statusHistory.push({ status:'DONE', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ผ่าน ใช้งานได้ปกติ' + (n ? ' — หมายเหตุ: ' + n : '') });
+    await persistOrders();
+    await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`);
+    for(const tech of assignedTechs(o)){
+      await tryLineWebhook(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
+    }
+    toast('ยืนยันผลการซ่อมเรียบร้อย ปิดงาน');
+  } else {
+    if(!n){ toast('กรุณาระบุสาเหตุที่ต้องซ่อมเพิ่มเติม', true); return; }
+    o.status = 'ASSIGNED';
+    o.verification = { result:'fail', by:o.requestedBy, at: nowIso(), note:n };
+    o.verificationHistory = [...(o.verificationHistory||[]), o.verification];
+    o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ' + n });
+    await persistOrders();
+    const techs = assignedTechs(o);
+    await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`);
+    for(const tech of techs){
+      await tryLineWebhook(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
+    }
+    toast('ส่งกลับเพื่อซ่อมเพิ่มเติมแล้ว');
+  }
+  closeActionBox();
+}
+
+/* ============================= SETTINGS ACTIONS ============================= */
+async function saveWebhook(){
+  const role = state.ui.newWebhookRole;
+  const prevUrl = state.config.lineWebhooks[role];
+  state.config.lineWebhooks[role] = state.ui.newWebhookUrl.trim();
+  // เดิม storeSet() ไม่เคยเช็คผลลัพธ์ ทำให้โชว์ toast "บันทึกแล้ว" เสมอแม้ POST จะล้มเหลวจริง
+  // (เช่น เน็ตหลุด/deploy สิทธิ์ผิด) ผู้ใช้จึงเข้าใจผิดว่าตั้งค่าสำเร็จทั้งที่ข้อมูลไม่เข้าเซิร์ฟเวอร์เลย
+  const ok = await storeSet('config', state.config);
+  if(!ok){
+    state.config.lineWebhooks[role] = prevUrl;
+    toast('บันทึก Webhook ไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    render();
+    return;
+  }
+  toast('บันทึก Webhook สำหรับ ' + ROLES[role].label + ' แล้ว');
+  render();
+}
+function openResetConfirm(){
+  state.ui.resetConfirming = true; state.ui.resetConfirmText = '';
+  render();
+}
+function cancelResetConfirm(){
+  state.ui.resetConfirming = false; state.ui.resetConfirmText = '';
+  render();
+}
+async function confirmResetAllData(){
+  if(state.ui.resetConfirmText.trim() !== 'ล้างข้อมูล'){
+    toast('กรุณาพิมพ์คำว่า "ล้างข้อมูล" ให้ตรงเพื่อยืนยัน', true);
+    return;
+  }
+  state.ui.resetConfirming = false; state.ui.resetConfirmText = '';
+  await resetAllData();
+}
+async function resetAllData(){
+  state.counters = {}; state.orders = []; state.notifications = [];
+  await storeSet('counters', state.counters);
+  await storeSet('orders', state.orders); await storeSet('notifications', state.notifications);
+  toast('ล้างข้อมูลระบบเรียบร้อย');
+  render();
+}
+
+/* ============================= RENDER: HEADER / NAV ============================= */
+// บทบาท "tech" หนึ่งบัญชี LINE อาจผูกกับชื่อช่างได้หลายคน (เช่น บัญชีทดสอบ) จึงต้องขยาย
+// รายการตัวเลือกให้เห็นชื่อช่างแต่ละคนแยกกัน ค่า option จึงเป็น "tech|<index>" สำหรับ tech
+// และเป็น role key เฉยๆ สำหรับบทบาทอื่น
+// admin สลับไปดูหน้าจอ "ในฐานะ" บทบาท/ช่างคนไหนก็ได้ — ระหว่างสลับ hasRole() จะเห็นเฉพาะ
+// บทบาทที่กำลังสวมอยู่จริง (ไม่ผ่าน admin bypass) เพื่อให้เห็นหน้าจอตรงกับที่คนนั้นเห็นจริง
+// สลับกลับมาเป็น admin ได้เสมอจาก dropdown เดียวกัน
+function techSwitchNames(){
+  return state.allowedRoles.includes('admin') ? (state.config.technicians || []) : state.techIdentities;
+}
+function roleOptionList(){
+  const isAdmin = state.allowedRoles.includes('admin');
+  const opts = [];
+  (isAdmin ? Object.keys(ROLES) : state.allowedRoles).forEach(r => {
+    if(r === 'tech'){
+      const names = techSwitchNames();
+      if(names.length > 1){
+        names.forEach((name, i) => {
+          opts.push({ value:`tech|${i}`, label:`${ROLES.tech.icon} ${ROLES.tech.label} — ${name}` });
+        });
+      } else {
+        opts.push({ value:'tech|0', label:`${ROLES.tech.icon} ${ROLES.tech.label}` + (names[0] ? ` — ${names[0]}` : '') });
+      }
+    } else {
+      opts.push({ value:r, label:`${ROLES[r].icon} ${ROLES[r].label}` });
+    }
+  });
+  return opts;
+}
+function currentRoleValue(){
+  if(state.role === 'tech'){
+    const idx = techSwitchNames().indexOf(state.myTechName);
+    return `tech|${idx >= 0 ? idx : 0}`;
+  }
+  return state.role;
+}
+function setRole(value){
+  const [key, idxStr] = String(value).split('|');
+  if(!ROLES[key]) return;
+  if(!state.allowedRoles.includes('admin') && !state.allowedRoles.includes(key)) return;
+  state.role = key; state.ui.actionFor=null; state.ui.actionType=null; state.ui.actionNote='';
+  if(key === 'tech'){
+    state.myTechName = techSwitchNames()[parseInt(idxStr, 10) || 0] || '';
+  }
+  if(state.view==='settings' && state.role!=='admin') state.view='list';
+  render();
+}
+function setView(v){
+  if(v==='settings' && state.role!=='admin') return;
+  if(v==='settings') ensureLineDataLoaded(); // ไม่ await — โหลดเบื้องหลัง render() เองเมื่อเสร็จ
+  state.view = v; render();
+}
+
+function renderHeader(){
+  const roleOpts = roleOptionList();
+  const curVal = currentRoleValue();
+  const roleUi = roleOpts.length > 1
+    ? `<select onchange="setRole(this.value)">${roleOpts.map(o => `<option value="${o.value}" ${curVal===o.value?'selected':''}>${o.label}</option>`).join('')}</select>`
+    : `<span class="mono">${roleOpts[0] ? roleOpts[0].label : ''}</span>`;
+  return `
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🛠</div>
+      <div>
+        <h1>ระบบแจ้งซ่อมเครื่องจักร</h1>
+        <div class="sub">Maintenance Work Order System</div>
+      </div>
+    </div>
+    <div class="role-select">
+      <span>บทบาทปัจจุบัน:</span>
+      ${roleUi}
+    </div>
+  </header>
+  <nav class="tabs">
+    <button class="${state.view==='new'?'active':''}" onclick="setView('new')">➕ ใบคำร้อง/ใบแจ้งซ่อม</button>
+    <button class="${state.view==='list'||state.view==='detail'?'active':''}" onclick="setView('list')">📋 รายการแจ้งซ่อม</button>
+    <button class="${state.view==='notif'?'active':''}" onclick="setView('notif')">🔔 การแจ้งเตือน${unreadCountForRole(state.role)>0?`<span class="badge">${unreadCountForRole(state.role)}</span>`:''}</button>
+    ${state.role==='admin' ? `<button class="${state.view==='settings'?'active':''}" onclick="setView('settings')">⚙️ ตั้งค่าข้อมูลหลัก${pendingAccessCount()>0?`<span class="badge">${pendingAccessCount()}</span>`:''}</button>` : ''}
+  </nav>`;
+}
+
+/* ============================= RENDER: NEW REQUEST ============================= */
+function renderNew(){
+  const f = state.form;
+  const deptButtons = state.config.departments.map(d => `
+    <button class="dept-btn ${f.dept===d.code?'selected':''}" onclick="selectDept('${d.code}')">
+      ${d.code}<span class="full-name">${escapeHtml(d.name)}</span>
+    </button>`).join('');
+
+  let machineSection = '';
+  if(f.dept){
+    if(f.machineCode){
+      machineSection = `
+        <div class="selected-machine">
+          <span><b class="mono">${escapeHtml(f.machineCode)}</b> — ${escapeHtml(f.machineName)}</span>
+          <button onclick="clearMachine()">เปลี่ยนเครื่อง</button>
+        </div>`;
+    } else {
+      const results = filteredMachines();
+      const dropdown = state.showMachineDropdown ? `
+        <div class="search-results">
+          ${results.length ? results.map(m=>`
+            <div class="search-item" onclick="pickMachine('${m.code}', '${escapeHtml(m.name).replace(/'/g,"\\'")}')">
+              <b class="code">${escapeHtml(m.code)}</b> — ${escapeHtml(m.name)}
+            </div>`).join('') : `<div class="search-item" style="color:var(--slate)">ไม่พบรหัสเครื่องจักรของแผนก ${f.dept} — เพิ่มได้ที่หน้าตั้งค่า</div>`}
+        </div>` : '';
+      machineSection = `
+        <div class="search-wrap">
+          <input class="input" data-fid="machineSearch" placeholder="พิมพ์ค้นหารหัสหรือชื่อเครื่องจักรในแผนก ${f.dept}..."
+            value="${escapeHtml(f.machineSearch)}"
+            oninput="updateFormField('machineSearch', this.value)"
+            onfocus="if(!state.showMachineDropdown){ state.showMachineDropdown=true; render(); }">
+          ${dropdown}
+        </div>`;
+    }
+  } else {
+    machineSection = `<div style="color:var(--slate-light); font-size:13px;">กรุณาเลือกแผนกก่อน เพื่อกรองรหัสเครื่องจักรของแผนกนั้น</div>`;
+  }
+
+  const photoThumbs = f.photos.map((p,i) => `
+    <div class="photo-thumb"><img src="${p}"><button class="rm" onclick="removePhoto(${i})">✕</button></div>`).join('');
+
+  return `
+  <h2 class="view-title">ใบคำร้อง / ใบแจ้งซ่อม</h2>
+  <p class="view-sub">กรอกรายละเอียดใบคำร้อง/ใบแจ้งซ่อม ระบบจะออกเลขที่เอกสารและแจ้งเตือนผู้อนุมัติให้อัตโนมัติ</p>
+  <div class="card">
+    <div class="field">
+      <label class="field-label">1. เลือกแผนกที่ต้องการแจ้งซ่อม <span class="req-star">*</span></label>
+      <div class="dept-grid">${deptButtons}</div>
+    </div>
+
+    <div class="docnum-box">
+      <span class="doc-chip">${previewDocNumber(f.dept)}</span>
+      <span class="hint">เลขที่เอกสาร (รันอัตโนมัติตามแผนกที่เลือก — ยืนยันเมื่อกดส่ง)</span>
+    </div>
+
+    <div class="field">
+      <label class="field-label">2. ประเภทเอกสาร <span class="req-star">*</span></label>
+      <select class="input" onchange="updateFormField('docType', this.value)">
+        <option value="">-- เลือกประเภทเอกสาร --</option>
+        <option value="request" ${f.docType==='request'?'selected':''}>1. ใบคำร้อง</option>
+        <option value="repair" ${f.docType==='repair'?'selected':''}>2. ใบแจ้งซ่อม</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label class="field-label">3. รหัสเครื่องจักร <span class="req-star">*</span></label>
+      ${machineSection}
+    </div>
+
+    <div class="field">
+      <label class="field-label">4. อาการ / สาเหตุที่ต้องการแจ้งซ่อม <span class="req-star">*</span></label>
+      <textarea class="input" data-fid="cause" placeholder="อธิบายอาการเสีย หรือสาเหตุที่พบ..." oninput="updateFormField('cause', this.value)">${escapeHtml(f.cause)}</textarea>
+    </div>
+
+    <div class="field">
+      <label class="field-label">แนบรูปภาพประกอบ (สูงสุด 5 รูป)</label>
+      <label class="photo-drop" for="photoInput">📷 แตะเพื่อเลือกรูปภาพ หรือถ่ายภาพใหม่</label>
+      <input id="photoInput" type="file" accept="image/*" multiple style="display:none" onchange="handlePhotoInput(this.files)">
+      <div class="photo-thumbs">${photoThumbs}</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="field">
+        <label class="field-label">5. วันที่ต้องการใช้งาน <span class="req-star">*</span></label>
+        <input class="input" data-fid="neededDate" type="date" value="${f.neededDate}" oninput="updateFormField('neededDate', this.value)">
+      </div>
+      <div class="field">
+        <label class="field-label">ชื่อผู้แจ้ง <span class="req-star">*</span></label>
+        <input class="input" data-fid="requestedBy" type="text" placeholder="ชื่อ-นามสกุล" value="${escapeHtml(f.requestedBy)}" oninput="updateFormField('requestedBy', this.value)">
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-block" onclick="submitOrder()">📨 ส่งเอกสาร</button>
+  </div>`;
+}
+
+/* ============================= RENDER: LIST ============================= */
+function renderList(){
+  const deptOpts = ['ALL', ...state.config.departments.map(d=>d.code)];
+  let orders = state.orders.filter(o =>
+    (state.filterStatus==='ALL' || o.status===state.filterStatus) &&
+    (state.filterDept==='ALL' || o.department===state.filterDept)
+  );
+  const cards = orders.map(o => {
+    const meta = STATUS_META[o.status];
+    return `
+    <div class="order-card" style="border-left-color:${meta.color}">
+      <div class="order-top">
+        <div>
+          <span class="doc-chip" style="font-size:14px; padding:3px 9px;">${o.docNumber}</span>
+          <span style="margin-left:8px; font-weight:600; color:var(--navy);">${o.department}</span>
+          ${o.docType ? `<span style="margin-left:8px; font-size:11.5px; color:var(--slate);">${DOC_TYPES[o.docType]||''}</span>` : ''}
+        </div>
+        <span class="status-pill" style="color:${meta.color}; background:${meta.bg};">${meta.label}</span>
+      </div>
+      <div class="order-body">
+        <div><b class="mono">${escapeHtml(o.machineCode)}</b> — ${escapeHtml(o.machineName)}</div>
+        <div class="cause">${escapeHtml(o.cause.length>90 ? o.cause.slice(0,90)+'…' : o.cause)}</div>
+        <div class="order-meta">ผู้แจ้ง: ${escapeHtml(o.requestedBy)} • ต้องการใช้งาน: ${fmtDate(o.neededDate)} • แจ้งเมื่อ ${fmtDateTime(o.createdAt)}</div>
+      </div>
+      <div class="order-actions">
+        <button class="btn btn-outline btn-sm" onclick="openDetail('${o.id}')">ดูรายละเอียด →</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+  <h2 class="view-title">รายการแจ้งซ่อม</h2>
+  <p class="view-sub">ทั้งหมด ${state.orders.length} รายการ</p>
+  <div class="filters">
+    <select onchange="state.filterDept=this.value; render();">
+      ${deptOpts.map(d=>`<option value="${d}" ${state.filterDept===d?'selected':''}>${d==='ALL'?'ทุกแผนก':d}</option>`).join('')}
+    </select>
+    <select onchange="state.filterStatus=this.value; render();">
+      <option value="ALL" ${state.filterStatus==='ALL'?'selected':''}>ทุกสถานะ</option>
+      ${Object.keys(STATUS_META).map(s=>`<option value="${s}" ${state.filterStatus===s?'selected':''}>${STATUS_META[s].label}</option>`).join('')}
+    </select>
+  </div>
+  ${!state.ordersLoaded ? `<p class="desc">⏳ กำลังโหลดรายการ...</p>` : ''}
+  ${orders.length ? cards : `<div class="empty-state"><div class="big">🗒️</div>ยังไม่มีใบแจ้งซ่อมตามเงื่อนไขที่เลือก</div>`}
+  `;
+}
+
+/* ============================= RENDER: DETAIL ============================= */
+function renderDetail(){
+  const o = getOrder(state.selectedOrderId);
+  if(!o) return `<button class="back-link" onclick="backToList()">← กลับ</button><div class="empty-state">ไม่พบใบแจ้งซ่อมนี้</div>`;
+  const meta = STATUS_META[o.status];
+
+  const timeline = o.statusHistory.map(h => `
+    <div class="timeline-item">
+      <div>${STATUS_META[h.status] ? STATUS_META[h.status].label : h.status} — ${escapeHtml(h.note||'')}</div>
+      <div class="t-time">${fmtDateTime(h.at)}</div>
+    </div>`).join('');
+
+  const gallery = state.detailPhotos.length ? `
+    <div class="kv"><div class="k">รูปภาพประกอบ</div>
+      <div class="gallery">${state.detailPhotos.map(p=>`<img src="${p}">`).join('')}</div>
+    </div>` : '';
+
+  // action box depending on role + status
+  let actionBox = '';
+  const actionBoxOpen = state.ui.actionFor === o.id;
+  const actionType = state.ui.actionType;
+  const NOTE_LABELS = { approve:'หมายเหตุ (ถ้ามี)', reject:'เหตุผลที่ไม่อนุมัติ', needinfo:'ระบุข้อมูลที่ต้องการเพิ่มเติม', resubmit:'ข้อมูลเพิ่มเติม', verify_pass:'หมายเหตุ (ถ้ามี)', verify_fail:'ระบุสาเหตุที่ต้องซ่อมเพิ่มเติม' };
+  const CONFIRM_LABELS = { approve:'ยืนยันอนุมัติ', reject:'ยืนยันไม่อนุมัติ', needinfo:'ส่งคำขอข้อมูลเพิ่มเติม', resubmit:'ส่งข้อมูล', verify_pass:'ยืนยันผ่านการตรวจสอบ', verify_fail:'ส่งกลับเพื่อซ่อมเพิ่มเติม' };
+  function noteBox(){
+    if(!actionBoxOpen) return '';
+    const photoThumbs = state.ui.resubmitPhotos.map((p,i) => `
+      <div class="photo-thumb"><img src="${p}"><button class="rm" onclick="removeResubmitPhoto(${i})">✕</button></div>`).join('');
+    const photoSection = actionType === 'resubmit' ? `
+      <div class="field" style="margin-top:10px; margin-bottom:0;">
+        <label class="field-label">แนบรูปภาพประกอบเพิ่มเติม (สูงสุด 5 รูป)</label>
+        <label class="photo-drop" for="resubmitPhotoInput">📷 แตะเพื่อเลือกรูปภาพ หรือถ่ายภาพใหม่</label>
+        <input id="resubmitPhotoInput" type="file" accept="image/*" multiple style="display:none" onchange="handleResubmitPhotoInput(this.files)">
+        <div class="photo-thumbs">${photoThumbs}</div>
+      </div>` : '';
+    return `
+      <div class="reject-box">
+        <label class="field-label">${NOTE_LABELS[actionType]}</label>
+        <textarea class="input" data-fid="actionNote" oninput="state.ui.actionNote=this.value" placeholder="ระบุหมายเหตุ...">${escapeHtml(state.ui.actionNote)}</textarea>
+        ${photoSection}
+        <div class="order-actions">
+          <button class="btn ${(actionType==='reject'||actionType==='verify_fail')?'btn-danger-outline':'btn-primary'} btn-sm" onclick="confirmAction('${o.id}')">${CONFIRM_LABELS[actionType]}</button>
+          <button class="btn btn-outline btn-sm" onclick="closeActionBox();">ยกเลิก</button>
+        </div>
+      </div>`;
+  }
+
+  if(!state.ordersLoaded){
+    // เปิดจากลิงก์แจ้งเตือน LINE โดยตรง — โชว์ใบนี้ได้ไวจากข้อมูลที่ขอมาเฉพาะใบ แต่ปุ่มที่ต้องบันทึกกลับ
+    // ต้องรอให้รายการเต็มโหลดเสร็จก่อน กันไม่ให้บันทึกทับข้อมูลใบอื่นที่ยังไม่ถูกโหลดเข้ามาใน state.orders
+    actionBox = `<div class="action-box"><p class="desc" style="margin:0;">⏳ กำลังโหลดข้อมูลเพิ่มเติม กรุณารอสักครู่ก่อนกดปุ่มดำเนินการ...</p></div>`;
+  } else if(hasRole('fm') && o.status==='PENDING_FM'){
+    actionBox = `
+    <div class="action-box">
+      <h4>รออนุมัติจากผู้จัดการโรงงาน</h4>
+      <div class="order-actions">
+        <button class="btn btn-success" onclick="openActionBox('${o.id}','approve')">✓ อนุมัติ</button>
+        <button class="btn btn-outline" onclick="openActionBox('${o.id}','needinfo')">❓ ต้องการข้อมูลเพิ่มเติม</button>
+        <button class="btn btn-danger-outline" onclick="openActionBox('${o.id}','reject')">✕ ไม่อนุมัติ</button>
+      </div>
+      ${noteBox()}
+    </div>`;
+  } else if(hasRole('gm') && o.status==='PENDING_GM'){
+    actionBox = `
+    <div class="action-box">
+      <h4>รออนุมัติจากผู้จัดการทั่วไป</h4>
+      <div class="order-actions">
+        <button class="btn btn-success" onclick="openActionBox('${o.id}','approve')">✓ อนุมัติ</button>
+        <button class="btn btn-outline" onclick="openActionBox('${o.id}','needinfo')">❓ ต้องการข้อมูลเพิ่มเติม</button>
+        <button class="btn btn-danger-outline" onclick="openActionBox('${o.id}','reject')">✕ ไม่อนุมัติ</button>
+      </div>
+      ${noteBox()}
+    </div>`;
+  } else if(hasRole('requester') && (o.status==='NEEDS_INFO_FM' || o.status==='NEEDS_INFO_GM')){
+    actionBox = `
+    <div class="action-box">
+      <h4>ต้องการข้อมูลเพิ่มเติมจากท่าน</h4>
+      <div class="order-actions">
+        <button class="btn btn-primary" onclick="openActionBox('${o.id}','resubmit')">📨 ส่งข้อมูลเพิ่มเติม</button>
+      </div>
+      ${noteBox()}
+    </div>`;
+  } else if(hasRole('requester') && o.status==='PENDING_VERIFY'){
+    actionBox = `
+    <div class="action-box">
+      <h4>ตรวจสอบผลการซ่อม</h4>
+      <p class="desc" style="margin:0 0 10px;">ช่างแจ้งว่าซ่อมเสร็จแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักรจริง</p>
+      <div class="order-actions">
+        <button class="btn btn-success" onclick="openActionBox('${o.id}','verify_pass')">✓ ผ่าน (ใช้งานได้ปกติ)</button>
+        <button class="btn btn-danger-outline" onclick="openActionBox('${o.id}','verify_fail')">✕ ไม่ผ่าน (ต้องซ่อมเพิ่มเติม)</button>
+      </div>
+      ${noteBox()}
+    </div>`;
+  } else if(hasRole('maint') && o.status==='PENDING_ASSIGN'){
+    const rows = state.ui.assignTechs.map((val, i) => `
+      <div class="inline-form" style="margin-bottom:6px;">
+        <select class="input" onchange="setAssignTech(${i}, this.value)">
+          <option value="">-- เลือกช่าง --</option>
+          ${state.config.technicians.map(t=>`<option value="${escapeHtml(t)}" ${val===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
+        ${state.ui.assignTechs.length>1 ? `<button class="btn btn-outline btn-sm" onclick="removeAssignTechRow(${i})">✕</button>` : ''}
+      </div>`).join('');
+    actionBox = `
+    <div class="action-box">
+      <h4>รับใบแจ้งซ่อม / มอบหมายช่างผู้รับผิดชอบ</h4>
+      <div class="field">
+        <label class="field-label">ผู้จัดการแผนกซ่อมบำรุงผู้รับเรื่อง (รับใบแจ้งซ่อม) <span class="req-star">*</span></label>
+        <input class="input" data-fid="assignReceivedBy" type="text" placeholder="ชื่อ-นามสกุล" value="${escapeHtml(state.ui.assignReceivedBy)}" oninput="state.ui.assignReceivedBy=this.value">
+      </div>
+      <label class="field-label">การมอบหมายงาน — ช่างผู้รับผิดชอบ <span class="req-star">*</span></label>
+      ${rows}
+      <button class="btn btn-outline btn-sm" onclick="addAssignTechRow()">+ เพิ่มช่าง</button>
+      <div class="grid-2" style="margin:14px 0 10px;">
+        <div class="field" style="margin-bottom:0;">
+          <label class="field-label">วันที่เริ่มงาน <span class="req-star">*</span></label>
+          <input type="date" class="input" value="${state.ui.assignStartDate}" onchange="state.ui.assignStartDate=this.value">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label class="field-label">กำหนดการดำเนินงานเสร็จสิ้น <span class="req-star">*</span></label>
+          <input type="date" class="input" value="${state.ui.assignEndDate}" onchange="state.ui.assignEndDate=this.value">
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">การดำเนินงาน <span class="req-star">*</span></label>
+        <select class="input" onchange="state.ui.assignExecutionPlan=this.value">
+          <option value="">-- เลือก --</option>
+          ${Object.entries(EXECUTION_PLAN_META).map(([k,v])=>`<option value="${k}" ${state.ui.assignExecutionPlan===k?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="order-actions" style="margin-top:10px;">
+        <button class="btn btn-primary" onclick="assignTechnician('${o.id}')">มอบหมายงาน</button>
+      </div>
+    </div>`;
+  } else if(hasRole('tech') && o.status==='ASSIGNED' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
+    actionBox = `
+    <div class="action-box">
+      <h4>งานถูกมอบหมายแล้ว — รอเริ่มดำเนินการ</h4>
+      <div class="order-actions"><button class="btn btn-primary" onclick="startRepair('${o.id}')">▶ เริ่มดำเนินการซ่อม</button></div>
+    </div>`;
+  } else if(hasRole('tech') && o.status==='IN_PROGRESS' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
+    actionBox = `
+    <div class="action-box">
+      <h4>กำลังซ่อม</h4>
+      <div class="order-actions"><button class="btn btn-success" onclick="finishRepair('${o.id}')">✓ ซ่อมเสร็จสิ้น</button></div>
+    </div>`;
+  }
+
+  // "บันทึกข้อมูลซ่อมบำรุง" — เอกสารประกอบตามใบมอบหมายงาน/ใบวิเคราะห์สาเหตุของ ผจก.แผนกซ่อมบำรุง
+  // แสดงให้ทุกบทบาทเห็นแบบอ่านอย่างเดียวหลังมอบหมายงานแล้ว แต่แก้ไข/บันทึกได้เฉพาะ role==='maint'
+  let maintRecordSection = '';
+  if(assignedTechs(o).length){
+    const mr = o.maintRecord;
+    const editingRecord = state.ui.maintRecordFor === o.id;
+    if(editingRecord){
+      const partRows = state.ui.maintRecordParts.map((p,i) => `
+        <tr>
+          <td>${i+1}</td>
+          <td><input class="input" style="min-width:130px;" value="${escapeHtml(p.name)}" oninput="setMaintPart(${i},'name',this.value)" placeholder="รายการอะไหล่/วัสดุที่ใช้"></td>
+          <td><input class="input" style="width:64px;" value="${escapeHtml(p.qty)}" oninput="setMaintPart(${i},'qty',this.value)"></td>
+          <td><input class="input" style="width:64px;" value="${escapeHtml(p.unit)}" oninput="setMaintPart(${i},'unit',this.value)"></td>
+          <td><input class="input" style="width:84px;" value="${escapeHtml(p.price)}" oninput="setMaintPart(${i},'price',this.value)"></td>
+          <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.shop)}" oninput="setMaintPart(${i},'shop',this.value)"></td>
+          <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.note)}" oninput="setMaintPart(${i},'note',this.value)"></td>
+          <td>${state.ui.maintRecordParts.length>1 ? `<button class="del" onclick="removeMaintPartRow(${i})">✕</button>` : ''}</td>
+        </tr>`).join('');
+      maintRecordSection = `
+      <div class="action-box">
+        <h4>บันทึกข้อมูลซ่อมบำรุง (ผจก.แผนกซ่อมบำรุง)</h4>
+        <div class="field">
+          <label class="field-label">วิเคราะห์สาเหตุ / อาการที่ชำรุด พบว่า <span class="req-star">*</span></label>
+          <textarea class="input" oninput="state.ui.maintRecordCause=this.value" placeholder="ระบุผลการวิเคราะห์สาเหตุ...">${escapeHtml(state.ui.maintRecordCause)}</textarea>
+        </div>
+        <div class="field">
+          <label class="field-label">ความคิดเห็นของช่างผู้ตรวจสอบ <span class="req-star">*</span></label>
+          <select class="input" onchange="state.ui.maintRecordOpinion=this.value">
+            <option value="">-- เลือก --</option>
+            ${Object.entries(INSPECTOR_OPINION_META).map(([k,v])=>`<option value="${k}" ${state.ui.maintRecordOpinion===k?'selected':''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <label class="field-label">รายการอะไหล่ / วัสดุที่ใช้ (เฉพาะเครื่องจักรมีรหัส)</label>
+          <div style="overflow-x:auto;">
+            <table class="mini">
+              <tr><th>ลำดับ</th><th>รายการ</th><th>จำนวน</th><th>หน่วย</th><th>ราคา</th><th>ชื่อร้าน</th><th>หมายเหตุ</th><th></th></tr>
+              ${partRows}
+            </table>
+          </div>
+          <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="addMaintPartRow()">+ เพิ่มรายการ</button>
+        </div>
+        <div class="order-actions">
+          <button class="btn btn-primary" onclick="saveMaintRecord('${o.id}')">บันทึก</button>
+          <button class="btn btn-outline" onclick="closeMaintRecord()">ยกเลิก</button>
+        </div>
+      </div>`;
+    } else {
+      maintRecordSection = `
+      <div class="action-box">
+        <h4>บันทึกข้อมูลซ่อมบำรุง (เอกสารประกอบ)</h4>
+        ${mr ? `
+          <div class="kv"><div class="k">วิเคราะห์สาเหตุ / อาการที่ชำรุด</div><div class="v">${escapeHtml(mr.causeAnalysis)}</div></div>
+          <div class="kv"><div class="k">ความคิดเห็นของช่างผู้ตรวจสอบ</div><div class="v">${INSPECTOR_OPINION_META[mr.inspectorOpinion]||'-'}</div></div>
+          ${mr.parts && mr.parts.length ? `
+          <div class="kv"><div class="k">รายการอะไหล่ / วัสดุที่ใช้</div>
+            <div style="overflow-x:auto;">
+              <table class="mini">
+                <tr><th>ลำดับ</th><th>รายการ</th><th>จำนวน</th><th>หน่วย</th><th>ราคา</th><th>ชื่อร้าน</th><th>หมายเหตุ</th></tr>
+                ${mr.parts.map((p,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.qty)}</td><td>${escapeHtml(p.unit)}</td><td>${escapeHtml(p.price)}</td><td>${escapeHtml(p.shop)}</td><td>${escapeHtml(p.note)}</td></tr>`).join('')}
+              </table>
+            </div>
+          </div>` : ''}
+        ` : `<p class="desc" style="margin:0 0 10px;">ยังไม่มีการบันทึกข้อมูล</p>`}
+        ${hasRole('maint') ? `<div class="order-actions"><button class="btn btn-outline btn-sm" onclick="openMaintRecord('${o.id}')">${mr?'แก้ไขบันทึก':'📋 บันทึกข้อมูลซ่อมบำรุง'}</button></div>` : ''}
+      </div>`;
+    }
+  }
+
+  return `
+  <button class="back-link" onclick="backToList()">← กลับไปรายการแจ้งซ่อม</button>
+  <div class="detail-head">
+    <div>
+      <span class="doc-chip">${o.docNumber}</span>
+      <h2 class="view-title" style="display:inline-block; margin-left:10px;">แผนก ${o.department}</h2>
+    </div>
+    <span class="status-pill" style="color:${meta.color}; background:${meta.bg}; font-size:13px; padding:6px 14px;">${meta.label}</span>
+  </div>
+  <div class="card">
+    <div class="grid-2">
+      <div class="kv"><div class="k">ประเภทเอกสาร</div><div class="v">${o.docType ? DOC_TYPES[o.docType] : '—'}</div></div>
+      <div class="kv"><div class="k">รหัสเครื่องจักร</div><div class="v mono">${escapeHtml(o.machineCode)}</div></div>
+      <div class="kv"><div class="k">ชื่อเครื่องจักร</div><div class="v">${escapeHtml(o.machineName)}</div></div>
+      <div class="kv"><div class="k">ผู้แจ้ง</div><div class="v">${escapeHtml(o.requestedBy)}</div></div>
+      <div class="kv"><div class="k">วันที่ต้องการใช้งาน</div><div class="v">${fmtDate(o.neededDate)}</div></div>
+      <div class="kv"><div class="k">แจ้งเมื่อ</div><div class="v">${fmtDateTime(o.createdAt)}</div></div>
+      <div class="kv"><div class="k">ช่างผู้รับผิดชอบ</div><div class="v">${assignedTechs(o).length ? assignedTechs(o).map(escapeHtml).join(', ') : '—'}</div></div>
+      ${o.assignment.receivedByName ? `<div class="kv"><div class="k">ผู้รับใบแจ้งซ่อม</div><div class="v">${escapeHtml(o.assignment.receivedByName)}</div></div>` : ''}
+      ${o.assignment.startDate ? `<div class="kv"><div class="k">วันที่เริ่มงาน</div><div class="v">${fmtDate(o.assignment.startDate)}</div></div>` : ''}
+      ${o.assignment.endDate ? `<div class="kv"><div class="k">กำหนดการดำเนินงานเสร็จสิ้น</div><div class="v">${fmtDate(o.assignment.endDate)}</div></div>` : ''}
+      ${o.assignment.executionPlan ? `<div class="kv"><div class="k">การดำเนินงาน</div><div class="v">${EXECUTION_PLAN_META[o.assignment.executionPlan]}</div></div>` : ''}
+      ${o.verification ? `<div class="kv"><div class="k">ผลการตรวจสอบของผู้แจ้ง (ล่าสุด)</div><div class="v">${VERIFY_RESULT_META[o.verification.result]}${o.verification.note ? ' — ' + escapeHtml(o.verification.note) : ''}</div></div>` : ''}
+    </div>
+    <div class="kv"><div class="k">อาการ / สาเหตุ</div><div class="v">${escapeHtml(o.cause)}</div></div>
+    ${gallery}
+    ${actionBox}
+    ${maintRecordSection}
+    ${o.verificationHistory && o.verificationHistory.length ? `
+    <div class="kv" style="margin-top:16px;"><div class="k">ประวัติการตรวจสอบของผู้แจ้ง (ครั้งที่ไม่ผ่าน)</div>
+      <div class="timeline">
+        ${o.verificationHistory.map(v => `<div class="timeline-item"><div>✕ ไม่ผ่าน — เนื่องจาก ${escapeHtml(v.note||'')}</div><div class="t-time">${fmtDateTime(v.at)}</div></div>`).join('')}
+      </div>
+    </div>` : ''}
+    <div class="kv" style="margin-top:20px;"><div class="k">ลำดับเหตุการณ์</div><div class="timeline">${timeline}</div></div>
+  </div>`;
+}
+
+/* ============================= RENDER: NOTIFICATIONS ============================= */
+async function markAllRead(){
+  state.notifications.forEach(n => { if(state.role==='admin' || n.toRole===state.role) n.read = true; });
+  await storeSet('notifications', state.notifications);
+  render();
+}
+function renderNotif(){
+  // admin เห็นการแจ้งเตือนของทุกบทบาทรวมกัน (ตรงกับ "เข้าถึงทุกฟังก์ชัน")
+  const mine = state.role === 'admin' ? state.notifications : state.notifications.filter(n => n.toRole === state.role);
+  const items = mine.map(n => `
+    <div class="notif-item ${n.read?'':'unread'}">
+      <div class="notif-icon">🔔</div>
+      <div>
+        <div class="notif-text">
+          ${state.role==='admin' ? `<span class="status-pill" style="color:#6b7785; background:#eef0f2; margin-right:6px;">${ROLES[n.toRole] ? ROLES[n.toRole].label : n.toRole}</span>` : ''}
+          <b class="mono">${n.docNumber}</b> — ${escapeHtml(n.message)}
+        </div>
+        <div class="notif-time">${fmtDateTime(n.createdAt)}</div>
+      </div>
+    </div>`).join('');
+  return `
+  <h2 class="view-title">การแจ้งเตือน — ${ROLES[state.role].label}</h2>
+  <p class="view-sub">${state.role==='admin' ? 'การแจ้งเตือนในระบบของทุกบทบาทรวมกัน' : 'การแจ้งเตือนในระบบสำหรับบทบาทนี้'} (พร้อมส่งต่อไปยัง LINE หากตั้งค่า Webhook ไว้ในหน้าตั้งค่า)</p>
+  ${!state.ordersLoaded ? `<p class="desc">⏳ กำลังโหลดรายการ...</p>` : ''}
+  ${mine.length ? `<div style="margin-bottom:12px;"><button class="btn btn-outline btn-sm" onclick="markAllRead()">ทำเครื่องหมายว่าอ่านแล้วทั้งหมด</button></div>` : ''}
+  ${mine.length ? items : `<div class="empty-state"><div class="big">📭</div>ยังไม่มีการแจ้งเตือนสำหรับบทบาทนี้</div>`}
+  `;
+}
+
+/* ============================= RENDER: SETTINGS ============================= */
+function toggleGrantRole(id, defaultRoles, role, checked){
+  const cur = state.ui.grantRole[id] || defaultRoles.slice();
+  state.ui.grantRole[id] = checked ? [...new Set([...cur, role])] : cur.filter(r => r !== role);
+  render();
+}
+function pendingAccessCount(){ return state.accessRequests.filter(r => r.status === 'pending').length; }
+function renderAccessRequests(){
+  const list = state.accessRequests.slice().sort((a,b) => String(b.at).localeCompare(String(a.at)));
+  const pending = list.filter(r => r.status === 'pending');
+  const decided = list.filter(r => r.status !== 'pending');
+  const techOptsFor = (cur) => (state.config.technicians || []).map(t =>
+    `<option value="${escapeHtml(t)}" ${cur === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+  // คนที่เคยทักไลน์ OA เข้ามา (แท็บ LINE Users) + คนที่ถูกกำหนดบทบาทไว้แล้ว + คนที่พิมพ์ไว้เองในชีต
+  // "แจ้งเตือน LINE - ผู้รับ" ให้ admin เลือกผูกกับคำขอนี้ได้ (รวมทุกแหล่ง ไม่ซ้ำ userId เดียวกัน)
+  const lineRecipientById = {};
+  state.lineRecipients.forEach(r => { if(r.userId && !lineRecipientById[r.userId]) lineRecipientById[r.userId] = r; });
+  const lineUserOptsFor = (cur) => {
+    const ids = [...new Set(
+      state.lineUsers.map(u => u.userId)
+        .concat(Object.keys(state.lineUserRoles))
+        .concat(Object.keys(lineRecipientById))
+    )];
+    return ids.map(id => {
+      const known = state.lineUsers.find(u => u.userId === id) || {};
+      const fromSheet = lineRecipientById[id];
+      const label = known.displayName || (state.lineUserRoles[id] && state.lineUserRoles[id].name)
+        || (fromSheet && fromSheet.name) || (fromSheet ? `(${fromSheet.role})` : id);
+      return `<option value="${escapeHtml(id)}" ${cur === id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+  };
+
+  const pendingCards = pending.map(r => {
+    const defaultRoles = [r.requestedRole];
+    const roles = state.ui.grantRole[r.id] || defaultRoles;
+    const techName = state.ui.grantTechName[r.id] || r.requestedTechName || '';
+    const lineUserId = state.ui.grantLineUserId[r.id] !== undefined ? state.ui.grantLineUserId[r.id] : (r.lineUserId || '');
+    const defaultRolesJs = `[${defaultRoles.map(x => `'${x}'`).join(',')}]`;
+    const roleChecks = Object.keys(ROLES).map(k => `
+        <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:normal;">
+          <input type="checkbox" value="${k}" ${roles.includes(k) ? 'checked' : ''}
+            onchange="toggleGrantRole('${r.id}', ${defaultRolesJs}, '${k}', this.checked)">
+          ${ROLES[k].label}
+        </label>`).join('');
+    return `
+    <div class="reject-box">
+      <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline;">
+        <b style="color:var(--navy); font-size:14.5px;">${escapeHtml(r.name)}</b>
+        <span style="font-size:12px; color:var(--slate);">${escapeHtml(fmtDateTime(r.at))}</span>
+      </div>
+      <div style="font-size:13px; color:var(--slate); margin-top:3px;">
+        แผนก: ${escapeHtml(r.dept || '-')} · ขอบทบาท: <b style="color:var(--ink);">${ROLES[r.requestedRole] ? escapeHtml(ROLES[r.requestedRole].label) : escapeHtml(r.requestedRole || '-')}</b>
+        ${r.requestedTechName ? ` · ระบุชื่อช่าง: ${escapeHtml(r.requestedTechName)}` : ''}
+        ${r.device ? ` · อุปกรณ์: ${escapeHtml(r.device)}` : ''}
+      </div>
+      ${r.note ? `<div style="font-size:13px; margin-top:4px;">หมายเหตุ: ${escapeHtml(r.note)}</div>` : ''}
+      <div style="margin-top:10px;">
+        <label class="field-label">บทบาทที่จะให้ (เลือกได้มากกว่า 1)</label>
+        <div style="display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:4px;">${roleChecks}</div>
+      </div>
+      ${roles.includes('tech') ? `
+      <div style="margin-top:10px;">
+        <label class="field-label">ชื่อช่าง (ต้องตรงกับชีต "ช่าง") <span class="req-star">*</span></label>
+        <select class="input" onchange="state.ui.grantTechName['${r.id}']=this.value">
+          <option value="">— กรุณาเลือก —</option>
+          ${techOptsFor(techName)}
+        </select>
+      </div>` : ''}
+      <div style="margin-top:10px;">
+        <label class="field-label">LINE ของคนนี้ (ถ้ามี) — จะส่งแจ้งเตือนไปหาโดยตรงตอนอนุมัติ</label>
+        <select class="input" onchange="state.ui.grantLineUserId['${r.id}']=this.value">
+          <option value="">— ไม่ทราบ/ไม่เชื่อม —</option>
+          ${lineUserOptsFor(lineUserId)}
+        </select>
+      </div>
+      <div class="order-actions" style="margin-top:12px;">
+        <button class="btn btn-success btn-sm" onclick="approveAccessRequest('${r.id}')">✓ อนุมัติ</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="rejectAccessRequest('${r.id}')">ปฏิเสธ</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  const decidedRows = decided.map(r => {
+    const granted = (r.roles || []).map(k => ROLES[k] ? ROLES[k].label : k).join(', ');
+    const pill = r.status === 'approved'
+      ? `<span class="status-pill" style="color:#2F8F6B; background:#e6f3ee;">อนุมัติแล้ว</span>`
+      : `<span class="status-pill" style="color:#B5433A; background:#fbeae8;">ปฏิเสธ</span>`;
+    if(r.status === 'approved' && state.ui.editingAccessId === r.id){
+      const roles = state.ui.editRole[r.id] || [];
+      const techName = state.ui.editTechName[r.id] || '';
+      const roleChecks = Object.keys(ROLES).map(k => `
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:normal;">
+            <input type="checkbox" value="${k}" ${roles.includes(k) ? 'checked' : ''}
+              onchange="toggleEditRole('${r.id}', '${k}', this.checked)">
+            ${ROLES[k].label}
+          </label>`).join('');
+      return `<tr><td colspan="4">
+        <div style="padding:6px 0;">
+          <div style="font-size:13px; margin-bottom:6px;"><b>${escapeHtml(r.name)}</b>${r.dept ? ` · ${escapeHtml(r.dept)}` : ''}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:4px 16px;">${roleChecks}</div>
+          ${roles.includes('tech') ? `
+          <div style="margin-top:8px;">
+            <label class="field-label">ชื่อช่าง (ต้องตรงกับชีต "ช่าง") <span class="req-star">*</span></label>
+            <select class="input" onchange="state.ui.editTechName['${r.id}']=this.value">
+              <option value="">— กรุณาเลือก —</option>
+              ${techOptsFor(techName)}
+            </select>
+          </div>` : ''}
+          <div class="order-actions" style="margin-top:10px;">
+            <button class="btn btn-success btn-sm" onclick="saveAccessRoles('${r.id}')">บันทึก</button>
+            <button class="btn btn-outline btn-sm" onclick="cancelEditAccessRoles()">ยกเลิก</button>
+          </div>
+        </div>
+      </td></tr>`;
+    }
+    return `<tr>
+      <td>${escapeHtml(r.name)}${r.techName ? `<div style="font-size:11.5px; color:var(--slate);">${escapeHtml(r.techName)}</div>` : ''}${r.device ? `<div style="font-size:11px; color:var(--slate-light);">${escapeHtml(r.device)}</div>` : ''}</td>
+      <td>${escapeHtml(r.dept || '-')}</td>
+      <td>${pill}${granted ? ` <span style="font-size:12px;">${escapeHtml(granted)}</span>` : ''}</td>
+      <td>
+        ${r.status === 'approved' ? `<button class="del" onclick="startEditAccessRoles('${r.id}')">แก้ไขบทบาท</button> ` : ''}
+        <button class="del" onclick="revokeAccessRequest('${r.id}')">ถอนสิทธิ์/ลบ</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="settings-section card">
+    <h3>คำขอสิทธิ์เข้าใช้งาน ${pending.length ? `<span class="status-pill" style="color:var(--navy); background:var(--amber);">${pending.length} รายการใหม่</span>` : ''}</h3>
+    <p class="desc">ผู้ใช้ที่ยังไม่มีสิทธิ์จะเห็นหน้า "ขอสิทธิ์เข้าใช้งาน" เมื่อเปิดลิงก์แอป เมื่อส่งคำขอเข้ามา ระบบจะแจ้งเตือนไปที่ LINE ของผู้ดูแล — กดอนุมัติที่นี่แล้วผู้ขอจะเข้าใช้งานได้เองภายในไม่กี่วินาที</p>
+    ${pending.length ? pendingCards : `<p class="desc" style="margin:0;">ไม่มีคำขอที่รออนุมัติ</p>`}
+    ${decided.length ? `
+    <h3 style="margin-top:20px;">ผู้ใช้ที่พิจารณาแล้ว</h3>
+    <table class="mini">
+      <tr><th>ชื่อ</th><th>แผนก</th><th>สถานะ / บทบาท</th><th></th></tr>
+      ${decidedRows}
+    </table>
+    <p class="desc" style="margin:10px 0 0; font-size:12px;">หมายเหตุ: ผู้ใช้ที่ผู้ดูแลพิมพ์แถวไว้ในชีต <b>สิทธิ์ผู้ใช้ LINE</b> เองจะไม่แสดงในตารางนี้ — จัดการได้ที่ชีตโดยตรง</p>` : ''}
+  </div>
+  `;
+}
+
+/* ============================= ADMIN: กำหนดบทบาทให้ผู้ใช้ LINE ============================= */
+async function saveLineUserRole(userId){
+  const id = String(userId || '').trim();
+  if(!id){ toast('ไม่พบ LINE userId', true); return; }
+  const cur = state.lineUserRoles[id] || {};
+  const role = state.ui.lineRole[id] !== undefined ? state.ui.lineRole[id] : ((cur.roles || [])[0] || '');
+  const techName = state.ui.lineTechName[id] !== undefined ? state.ui.lineTechName[id] : (cur.techName || '');
+  if(role && !ROLES[role]){ toast('บทบาทไม่ถูกต้อง', true); return; }
+  if(role === 'tech' && !techName){ toast('กรุณาเลือกชื่อช่างให้ตรงกับชีต "ช่าง"', true); return; }
+  const known = state.lineUsers.find(u => u.userId === id);
+  const next = Object.assign({}, state.lineUserRoles);
+  if(!role){
+    delete next[id];   // ไม่เลือกบทบาท = ยกเลิกการกำหนด
+  } else {
+    next[id] = {
+      name: (state.ui.lineName[id] || cur.name || (known && known.displayName) || '').trim(),
+      roles: [role],
+      techName: role === 'tech' ? techName : '',
+    };
+  }
+  if(!await storeSet('lineUserRoles', next)){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  state.lineUserRoles = next;
+  toast(role ? `กำหนด "${ROLES[role].label}" แล้ว` : 'ยกเลิกการกำหนดบทบาทแล้ว');
+  render();
+}
+async function addLineUserManually(){
+  const id = (state.ui.newLineUserId || '').trim();
+  const name = (state.ui.newLineUserName || '').trim();
+  if(!id){ toast('กรุณากรอก LINE userId', true); return; }
+  if(state.lineUsers.some(u => u.userId === id)){ toast('มีผู้ใช้รายนี้ในรายการอยู่แล้ว', true); return; }
+  const next = state.lineUsers.concat([{ userId:id, displayName:name || '(เพิ่มด้วยตัวเอง)', lastSeen:nowIso() }]);
+  if(!await storeSet('lineUsers', next)){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  state.lineUsers = next;
+  state.ui.newLineUserId = ''; state.ui.newLineUserName = '';
+  toast('เพิ่มผู้ใช้ LINE แล้ว — เลือกบทบาทให้เขาได้เลย');
+  render();
+}
+function setLineRole(userId, v){ state.ui.lineRole[userId] = v; render(); }
+function renderLineUserRoles(){
+  // รวมคนที่ทักเข้ามา (แท็บ LINE Users) กับคนที่ถูกกำหนดบทบาทไว้แล้ว เผื่อบางรายไม่อยู่ในรายการที่ทักเข้ามา
+  const ids = [...new Set(state.lineUsers.map(u => u.userId).concat(Object.keys(state.lineUserRoles)))];
+  const techOptsFor = (cur) => (state.config.technicians || []).map(t =>
+    `<option value="${escapeHtml(t)}" ${cur === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+
+  const rows = ids.map(id => {
+    const known = state.lineUsers.find(u => u.userId === id) || {};
+    const cur = state.lineUserRoles[id] || {};
+    const role = state.ui.lineRole[id] !== undefined ? state.ui.lineRole[id] : ((cur.roles || [])[0] || '');
+    const techName = state.ui.lineTechName[id] !== undefined ? state.ui.lineTechName[id] : (cur.techName || '');
+    const roleOpts = Object.keys(ROLES).map(k =>
+      `<option value="${k}" ${role === k ? 'selected' : ''}>${ROLES[k].label}</option>`).join('');
+    const assigned = (cur.roles || [])[0];
+    return `
+    <div class="reject-box">
+      <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline;">
+        <b style="color:var(--navy); font-size:14.5px;">${escapeHtml(known.displayName || cur.name || '(ไม่ทราบชื่อ)')}</b>
+        ${assigned
+          ? `<span class="status-pill" style="color:#2F8F6B; background:#e6f3ee;">${escapeHtml(ROLES[assigned] ? ROLES[assigned].label : assigned)}${cur.techName ? ' — ' + escapeHtml(cur.techName) : ''}</span>`
+          : `<span class="status-pill" style="color:#6b7785; background:#eef0f2;">ยังไม่กำหนดบทบาท</span>`}
+      </div>
+      <div class="mono" style="font-size:11px; color:var(--slate); margin-top:3px; word-break:break-all;">${escapeHtml(id)}</div>
+      ${known.lastSeen ? `<div style="font-size:12px; color:var(--slate);">ทักเข้ามาล่าสุด: ${escapeHtml(String(known.lastSeen))}</div>` : ''}
+      <div style="margin-top:10px;">
+        <label class="field-label">ชื่อที่ใช้แสดงในระบบ</label>
+        <input class="input" data-fid="lineName-${escapeHtml(id)}" value="${escapeHtml(state.ui.lineName[id] !== undefined ? state.ui.lineName[id] : (cur.name || known.displayName || ''))}" oninput="state.ui.lineName['${escapeHtml(id)}']=this.value" placeholder="ชื่อ-นามสกุล">
+      </div>
+      <div style="margin-top:10px;">
+        <label class="field-label">บทบาท</label>
+        <select class="input" onchange="setLineRole('${escapeHtml(id)}', this.value)">
+          <option value="" ${role === '' ? 'selected' : ''}>— ไม่กำหนด —</option>
+          ${roleOpts}
+        </select>
+      </div>
+      ${role === 'tech' ? `
+      <div style="margin-top:10px;">
+        <label class="field-label">ชื่อช่าง (ต้องตรงกับชีต "ช่าง") <span class="req-star">*</span></label>
+        <select class="input" onchange="state.ui.lineTechName['${escapeHtml(id)}']=this.value">
+          <option value="">— กรุณาเลือก —</option>
+          ${techOptsFor(techName)}
+        </select>
+      </div>` : ''}
+      <div class="order-actions" style="margin-top:12px;">
+        <button class="btn btn-success btn-sm" onclick="saveLineUserRole('${escapeHtml(id)}')">บันทึกบทบาท</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="settings-section card">
+    <h3>กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา</h3>
+    <p class="desc">กำหนดว่าผู้ใช้ LINE แต่ละคนเป็นบทบาทไหน เพื่อให้ <b>การแจ้งเตือนทาง LINE</b> ของบทบาทนั้นส่งตรงถึงคนที่ถูกต้อง (แทนการกระจายให้เพื่อนทุกคนใน OA) — ส่วนสิทธิ์ <b>เข้าใช้งานแอป</b> อนุมัติที่หัวข้อ "คำขอสิทธิ์เข้าใช้งาน" ด้านบน</p>
+    ${ids.length ? rows : `<p class="desc" style="margin:0;">ยังไม่มีผู้ใช้ LINE ในรายการ — ให้แต่ละคนทักแชทหา LINE OA หนึ่งครั้ง แล้วนำ userId จากแท็บ <b>LINE Users</b> ในชีตมาเพิ่มด้านล่าง</p>`}
+    <h3 style="margin-top:20px;">เพิ่มผู้ใช้ LINE ด้วยตัวเอง</h3>
+    <p class="desc">คัดลอก userId จากแท็บ <b>LINE Users</b> ในชีต (คนที่ทักแชทหา OA แล้วจะถูกบันทึกไว้ที่นั่นอัตโนมัติ)</p>
+    <div class="inline-form">
+      <input class="input mono" data-fid="newLineUserId" style="font-size:12px;" value="${escapeHtml(state.ui.newLineUserId)}" oninput="state.ui.newLineUserId=this.value" placeholder="U1234567890abcdef...">
+      <input class="input" data-fid="newLineUserName" value="${escapeHtml(state.ui.newLineUserName)}" oninput="state.ui.newLineUserName=this.value" placeholder="ชื่อ-นามสกุล">
+      <button class="btn btn-outline btn-sm" onclick="addLineUserManually()">เพิ่ม</button>
+    </div>
+    <div class="summary-link" style="margin-top:12px;">
+      <div class="txt">เปิดแท็บ <b>LINE Users</b> เพื่อดู userId ของคนที่ทักเข้ามา</div>
+      <a href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
+    </div>
+  </div>
+  `;
+}
+
+function renderSettings(){
+  const webhookRoles = ['admin','fm','gm','maint','tech','requester'];
+  const webhookRoleOpts = webhookRoles.map(r=>`<option value="${r}" ${state.ui.newWebhookRole===r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('');
+  const webhookRows = webhookRoles.map(r => `
+    <tr><td>${ROLES[r].label}</td><td class="mono" style="word-break:break-all;">${state.config.lineWebhooks[r] ? escapeHtml(state.config.lineWebhooks[r]) : '<span style="color:var(--slate-light)">ยังไม่ได้ตั้งค่า</span>'}</td></tr>`).join('');
+
+  return `
+  <h2 class="view-title">ตั้งค่าข้อมูลหลัก</h2>
+  <p class="view-sub">ข้อมูลหลักจัดการที่ Google Sheet ส่วนนี้ตั้งค่าเฉพาะของแอป</p>
+  ${!state.lineDataLoaded ? `<p class="desc">⏳ กำลังโหลดข้อมูลผู้ใช้ LINE...</p>` : ''}
+
+  ${renderAccessRequests()}
+
+  ${renderLineUserRoles()}
+
+  <div class="settings-section card">
+    <h3>แผนก · เครื่องจักร · ช่าง</h3>
+    <p class="desc">แก้ไข เพิ่ม หรือลบข้อมูลได้โดยตรงที่ Google Sheet — เปลี่ยนแล้วเข้าแอปอัตโนมัติภายในไม่กี่วินาที</p>
+    <div class="summary-stats">
+      <div class="stat"><div class="num">${state.config.departments.length}</div><div class="lbl">แผนก</div></div>
+      <div class="stat"><div class="num">${state.config.machines.length}</div><div class="lbl">เครื่องจักร</div></div>
+      <div class="stat"><div class="num">${state.config.technicians.length}</div><div class="lbl">ช่าง</div></div>
+    </div>
+    <div class="summary-link">
+      <div class="txt">เปิด <b>ระบบแจ้งซ่อมเครื่องจักร - Database</b> เพื่อแก้ไข</div>
+      <a href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
+    </div>
+  </div>
+
+  <div class="settings-section card">
+    <h3>การเชื่อมต่อแจ้งเตือน LINE</h3>
+    <details class="info-toggle">
+      <summary>LINE Notify ปิดให้บริการแล้ว — อ่านเพิ่มเติม</summary>
+      <p class="desc" style="margin-top:-2px;">ปิดให้บริการตั้งแต่ 31 มี.ค. 2568 การส่งข้อความ LINE จริงในปัจจุบันต้องใช้ LINE Official Account + Messaging API ซึ่งต้องมีระบบหลังบ้าน (server) เก็บ token อย่างปลอดภัย — ไม่สามารถฝังไว้ในหน้าเว็บนี้ได้โดยตรง ระบบนี้จึงมี "การแจ้งเตือนในระบบ" ให้ใช้งานได้ทันที และมีช่อง Webhook URL ด้านล่างสำหรับต่อยอด: หากท่านตั้งค่า relay ผ่าน Google Apps Script / n8n / Make.com ที่รับ POST แล้วส่งต่อเข้า LINE Messaging API เอง ระบบจะยิงข้อมูลไปที่ URL นั้นให้อัตโนมัติทุกครั้งที่มีการเปลี่ยนสถานะ</p>
+    </details>
+    <table class="mini"><tr><th>บทบาท</th><th>Webhook URL</th></tr>${webhookRows}</table>
+    <div class="inline-form">
+      <select class="input" onchange="state.ui.newWebhookRole=this.value">${webhookRoleOpts}</select>
+      <input class="input" data-fid="newWebhookUrl" placeholder="https://..." oninput="state.ui.newWebhookUrl=this.value">
+      <button class="btn btn-outline btn-sm" onclick="saveWebhook()">บันทึก</button>
+    </div>
+  </div>
+
+  <div class="settings-section card">
+    <h3>รีเซ็ตข้อมูลระบบ</h3>
+    <p class="desc">ล้างใบแจ้งซ่อม เลขที่เอกสาร และการแจ้งเตือนทั้งหมด (ไม่กระทบแผนก/เครื่องจักร/ช่างใน Sheet)</p>
+    ${state.ui.resetConfirming ? `
+    <div class="reject-box">
+      <p style="margin:0 0 10px; color:var(--danger); font-weight:600;">คำเตือน: จะลบใบแจ้งซ่อม การแจ้งเตือน และเลขที่เอกสารทั้งหมดอย่างถาวร ไม่สามารถย้อนกลับได้ และมีผลกับผู้ใช้งานทุกคนทันที</p>
+      <label class="field-label">พิมพ์คำว่า "ล้างข้อมูล" เพื่อยืนยัน</label>
+      <input class="input" data-fid="resetConfirmText" value="${escapeHtml(state.ui.resetConfirmText)}" oninput="state.ui.resetConfirmText=this.value" placeholder="ล้างข้อมูล">
+      <div class="order-actions" style="margin-top:10px;">
+        <button class="btn btn-danger-outline btn-sm" onclick="confirmResetAllData()">ยืนยันล้างข้อมูลทั้งหมด</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelResetConfirm()">ยกเลิก</button>
+      </div>
+    </div>` : `
+    <button class="btn btn-danger-outline btn-sm" onclick="openResetConfirm()">ล้างข้อมูลทั้งหมด</button>`}
+  </div>
+  `;
+}
+
+/* ============================= RENDER: ขอสิทธิ์เข้าใช้งาน ============================= */
+function renderAuthShell(inner){
+  return `
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🛠</div>
+      <div>
+        <h1>ระบบแจ้งซ่อมเครื่องจักร</h1>
+        <div class="sub">Maintenance Work Order System</div>
+      </div>
+    </div>
+  </header>
+  <main style="max-width:560px;">${inner}</main>`;
+}
+/* กล่องสำหรับผู้ดูแลระบบคนแรก (ยังไม่มีใครเป็น admin ในระบบ) — เอารหัสประจำเครื่องไปใส่ในชีตเองได้
+   เป็นทางเดียวที่ใช้ตั้ง admin คนแรกได้ หลังจากนั้น admin กดอนุมัติคนอื่นในแอปได้เลย */
+function renderAdminBootstrap(){
+  return `
+  <details class="info-toggle" style="margin-top:14px;">
+    <summary>สำหรับผู้ดูแลระบบ: ตั้งเครื่องนี้เป็นผู้ดูแลระบบ (admin)</summary>
+    <p class="desc" style="font-size:12.5px; color:var(--slate); margin:8px 0;">
+      เปิดชีต <b>สิทธิ์ผู้ใช้ LINE</b> แล้วเพิ่ม 1 แถว โดยใส่ 3 ช่องนี้ตามลำดับ:
+      <span class="mono">รหัสประจำเครื่อง</span> · <span class="mono">admin</span> · <span class="mono">ชื่อของท่าน</span>
+      แล้วรอประมาณ 7 วินาที หน้านี้จะเข้าระบบให้เอง
+    </p>
+    <label class="field-label">รหัสประจำเครื่องของเครื่องนี้</label>
+    <input class="input mono" style="font-size:12px;" readonly value="${escapeHtml(state.deviceId || '')}" onclick="this.select()">
+    <div class="order-actions" style="margin-top:10px;">
+      <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(state.deviceId || '')}', 'คัดลอกรหัสประจำเครื่องแล้ว')">คัดลอกรหัส</button>
+      <a class="btn btn-outline btn-sm" href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
+    </div>
+  </details>`;
+}
+function renderRequestAccess(){
+  const u = state.ui;
+  // ตอนนี้หน้านี้โชว์ได้ก่อน config (แผนก/ช่าง) จะโหลดเสร็จ (ดู authenticate()) — ระหว่างนั้น
+  // state.config ยังเป็นค่า default ที่ฝังในโค้ด (DEPT_DEFAULT/TECH_DEFAULT) ซึ่งเป็นแค่ placeholder
+  // ไม่ใช่ข้อมูลจริงจากชีต ถ้าเอามาโชว์เป็นตัวเลือกจะทำให้ผู้ใช้เข้าใจผิดว่าเป็นรายชื่อจริง (เคยเกิดขึ้นมาแล้ว
+  // — เห็นแค่ 4 แผนกชื่อภาษาอังกฤษ ทั้งที่ชีตจริงมี 9 แผนกชื่อภาษาไทย) จึงต้องรอ state.loaded ก่อนค่อยโชว์
+  // รายการจริง ระหว่างรอให้ปิดช่องเลือกไว้พร้อมข้อความ "กำลังโหลด..." แทน
+  const configReady = state.loaded;
+  const deptOpts = configReady ? (state.config.departments || []).map(d =>
+    `<option value="${escapeHtml(d.code)}" ${u.reqDept === d.code ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('') : '';
+  const roleOpts = Object.keys(ROLES).filter(r => r !== 'admin').map(r =>
+    `<option value="${r}" ${u.reqRole === r ? 'selected' : ''}>${ROLES[r].icon} ${ROLES[r].label}</option>`).join('');
+  const techOpts = configReady ? (state.config.technicians || []).map(t =>
+    `<option value="${escapeHtml(t)}" ${u.reqTechName === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('') : '';
+  return renderAuthShell(`
+    <h2 class="view-title">ขอสิทธิ์เข้าใช้งาน</h2>
+    <p class="view-sub">กรอกข้อมูลเพื่อขอสิทธิ์ ผู้ดูแลระบบจะเป็นผู้อนุมัติและกำหนดบทบาทให้ท่าน</p>
+    <div class="card">
+      <div class="field">
+        <label class="field-label">ชื่อ-นามสกุล <span class="req-star">*</span></label>
+        <input class="input" value="${escapeHtml(u.reqName)}" oninput="state.ui.reqName=this.value" placeholder="เช่น สมชาย ใจดี">
+      </div>
+      <div class="field">
+        <label class="field-label">แผนก</label>
+        <select class="input" onchange="state.ui.reqDept=this.value" ${configReady ? '' : 'disabled'}>
+          <option value="">${configReady ? '— ไม่ระบุ —' : 'กำลังโหลดรายชื่อแผนก...'}</option>
+          ${deptOpts}
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">บทบาทที่ต้องการ <span class="req-star">*</span></label>
+        <select class="input" onchange="state.ui.reqRole=this.value; state.ui.reqTechName=''; render()">${roleOpts}</select>
+      </div>
+      ${u.reqRole === 'tech' ? `
+      <div class="field">
+        <label class="field-label">ชื่อช่าง (เลือกชื่อของท่านจากรายชื่อช่าง) <span class="req-star">*</span></label>
+        <select class="input" onchange="state.ui.reqTechName=this.value" ${configReady ? '' : 'disabled'}>
+          <option value="">${configReady ? '— กรุณาเลือก —' : 'กำลังโหลดรายชื่อช่าง...'}</option>
+          ${techOpts}
+        </select>
+        <p class="desc" style="font-size:12px; color:var(--slate); margin:6px 0 0;">ต้องเลือกให้ตรงกับชื่อตัวเอง ระบบใช้ชื่อนี้ตรวจว่างานไหนเป็นงานที่มอบหมายให้ท่าน</p>
+      </div>` : ''}
+      <div class="field">
+        <label class="field-label">หมายเหตุถึงผู้ดูแล</label>
+        <input class="input" value="${escapeHtml(u.reqNote)}" oninput="state.ui.reqNote=this.value" placeholder="เช่น เบอร์ติดต่อ หรือข้อมูลยืนยันตัวตน">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="submitAccessRequest()" ${u.reqSending ? 'disabled' : ''}>
+        ${u.reqSending ? 'กำลังส่งคำขอ...' : 'ส่งคำขอสิทธิ์'}
+      </button>
+    </div>
+    ${renderAdminBootstrap()}`);
+}
+function renderPendingAccess(){
+  const r = state.myRequest || {};
+  return renderAuthShell(`
+    <div class="card" style="text-align:center;">
+      <div style="font-size:44px;">⏳</div>
+      <h2 class="view-title" style="margin-top:6px;">ส่งคำขอแล้ว รอผู้ดูแลอนุมัติ</h2>
+      <p class="view-sub" style="margin-bottom:16px;">ผู้ดูแลระบบได้รับแจ้งเตือนทาง LINE แล้ว เมื่ออนุมัติหน้านี้จะเข้าระบบให้เองโดยท่านไม่ต้องทำอะไร (ไม่ต้องปิดหน้านี้)</p>
+      <table class="mini" style="text-align:left;">
+        <tr><th>ชื่อ</th><td>${escapeHtml(r.name || '-')}</td></tr>
+        <tr><th>แผนก</th><td>${escapeHtml(r.dept || '-')}</td></tr>
+        <tr><th>บทบาทที่ขอ</th><td>${ROLES[r.requestedRole] ? escapeHtml(ROLES[r.requestedRole].label) : '-'}</td></tr>
+        ${r.requestedTechName ? `<tr><th>ชื่อช่าง</th><td>${escapeHtml(r.requestedTechName)}</td></tr>` : ''}
+        <tr><th>ส่งเมื่อ</th><td>${r.at ? escapeHtml(fmtDateTime(r.at)) : '-'}</td></tr>
+      </table>
+      <div class="order-actions" style="margin-top:14px; justify-content:center;">
+        <button class="btn btn-outline btn-sm" onclick="recheckAccess()">ตรวจสอบสถานะตอนนี้</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">แก้ไข / ยกเลิกคำขอ</button>
+      </div>
+    </div>
+    ${renderAdminBootstrap()}`);
+}
+function renderRejectedAccess(){
+  const r = state.myRequest || {};
+  return renderAuthShell(`
+    <div class="card" style="text-align:center;">
+      <div style="font-size:44px;">🚫</div>
+      <h2 class="view-title" style="margin-top:6px;">คำขอสิทธิ์ไม่ได้รับการอนุมัติ</h2>
+      <p class="view-sub">คำขอของ "${escapeHtml(r.name || '-')}" ถูกปฏิเสธโดยผู้ดูแลระบบ หากเข้าใจว่าเป็นความเข้าใจผิด กรุณาติดต่อผู้ดูแลระบบ แล้วส่งคำขอใหม่ได้</p>
+      <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">ส่งคำขอใหม่</button>
+    </div>`);
+}
+
+/* ============================= MAIN RENDER ============================= */
+function render(){
+  const app = document.getElementById('app');
+  if(state.authStatus === 'loading'){
+    app.innerHTML = `<div style="padding:60px; text-align:center; color:var(--slate);">กำลังตรวจสอบสิทธิ์ผู้ใช้งาน...</div>`;
+    return;
+  }
+  if(state.authStatus === 'guest'){ app.innerHTML = renderRequestAccess(); return; }
+  if(state.authStatus === 'pending'){ app.innerHTML = renderPendingAccess(); return; }
+  if(state.authStatus === 'rejected'){ app.innerHTML = renderRejectedAccess(); return; }
+  if(!state.loaded){
+    app.innerHTML = `<div style="padding:60px; text-align:center; color:var(--slate);">กำลังโหลดระบบ...</div>`;
+    return;
+  }
+  const active = document.activeElement;
+  const fid = active && app.contains(active) ? active.getAttribute('data-fid') : null;
+  const selStart = fid && 'selectionStart' in active ? active.selectionStart : null;
+  const selEnd = fid && 'selectionEnd' in active ? active.selectionEnd : null;
+
+  let body = '';
+  if(state.view==='new') body = renderNew();
+  else if(state.view==='list') body = renderList();
+  else if(state.view==='detail') body = renderDetail();
+  else if(state.view==='notif') body = renderNotif();
+  else if(state.view==='settings') body = state.role==='admin' ? renderSettings() : renderList();
+  const updateBanner = state.updateAvailable ? `
+    <div class="update-banner">
+      🔄 มีการอัปเดตระบบเวอร์ชันใหม่ — กรุณารีเฟรชหน้าเพื่อใช้งานเวอร์ชันล่าสุด
+      <button class="btn btn-primary btn-sm" onclick="location.reload()">รีเฟรชตอนนี้</button>
+    </div>` : '';
+  app.innerHTML = updateBanner + renderHeader() + `<main>${body}</main>`;
+
+  if(fid){
+    const restored = app.querySelector(`[data-fid="${fid}"]`);
+    if(restored){
+      restored.focus();
+      if(selStart != null && restored.setSelectionRange){
+        try{ restored.setSelectionRange(selStart, selEnd); }catch(e){}
+      }
+    }
+  }
+}
+
+/* ============================= LIVE POLLING (near real-time sync) ============================= */
+async function pollForUpdates(){
+  try{
+    // lineUsers/lineUserRoles/lineRecipients ใช้แค่หน้าตั้งค่าของ admin — โหลด/poll แค่ตอนเคยเข้าหน้านั้น
+    // แล้วเท่านั้น (state.lineDataLoaded) คนอื่นๆ ไม่ต้องยิง 3 คำขอนี้ทุก 3 วิให้เสียเวลาเปล่า
+    const lineDataPromise = state.lineDataLoaded
+      ? Promise.all([storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')])
+      : Promise.resolve([null, null, null]);
+    const [cfg, orders, notifs, reqs, [lineUsers, lineUserRoles, lineRecipients]] = await Promise.all([
+      storeGet('config'), storeGet('orders'), storeGet('notifications'), storeGet('accessRequests'),
+      lineDataPromise
+    ]);
+    let changed = false;
+    if(lineUsers && JSON.stringify(lineUsers) !== JSON.stringify(state.lineUsers)){ state.lineUsers = lineUsers; changed = true; }
+    if(lineUserRoles && JSON.stringify(lineUserRoles) !== JSON.stringify(state.lineUserRoles)){ state.lineUserRoles = lineUserRoles; changed = true; }
+    if(lineRecipients && JSON.stringify(lineRecipients) !== JSON.stringify(state.lineRecipients)){ state.lineRecipients = lineRecipients; changed = true; }
+    if(cfg && JSON.stringify(cfg) !== JSON.stringify(state.config)){ state.config = cfg; changed = true; }
+    if(orders && JSON.stringify(orders) !== JSON.stringify(state.orders)){ state.orders = orders; changed = true; }
+    if(notifs && JSON.stringify(notifs) !== JSON.stringify(state.notifications)){ state.notifications = notifs; changed = true; }
+    // กันเหนียว: ถ้า loadBackground() พลาดไปด้วยเหตุผลใดก็ตาม รอบ poll ถัดไปที่ได้ orders มาจริง
+    // จะปลดล็อกปุ่มบันทึกต่างๆ ให้เองแทน ไม่ต้องรอ refresh หน้า
+    if(orders && !state.ordersLoaded) state.ordersLoaded = true;
+    // คำขอสิทธิ์: ให้ admin เห็นคำขอใหม่สดๆ และถ้าสิทธิ์ของตัวเองถูกแก้/ถอนระหว่างใช้งานก็ปรับตามทันที
+    if(reqs && JSON.stringify(reqs) !== JSON.stringify(state.accessRequests)){
+      const grantSig = r => r ? `${r.status}|${(r.roles || []).join(',')}|${r.techName || ''}` : '';
+      const before = grantSig(state.myRequest);
+      state.accessRequests = reqs;
+      state.myRequest = requestFor(state.didHash, reqs);
+      if(grantSig(state.myRequest) !== before){
+        await resolveAccess();   // สิทธิ์อาจยังเหลือจากชีตอยู่ จึงต้องประเมินใหม่ทั้งสองแหล่ง
+        if(state.authStatus !== 'ok'){ location.reload(); return; }
+      }
+      changed = true;
+    }
+    if(changed) render();
+  }catch(e){ /* silent - next poll retries */ }
+}
+
+/* แท็บที่เปิดค้างไว้นานจะยังรันโค้ด JS เดิมในหน่วยความจำต่อไปเรื่อยๆ แม้ index.html บนเซิร์ฟเวอร์จะอัปเดตแล้ว
+   (เช่น ปุ่มกดต่างๆ จะยังส่งแจ้งเตือนแบบไม่มี deep link) จึงต้องดึงไฟล์ล่าสุดมาเทียบเวอร์ชันเป็นระยะ
+   แล้วเตือนให้ผู้ใช้รีเฟรชเอง แทนที่จะรีโหลดอัตโนมัติ (จะได้ไม่ขัดจังหวะระหว่างกรอกฟอร์ม) */
+async function checkForUpdate(){
+  if(state.updateAvailable) return;
+  try{
+    const res = await fetch(location.pathname + '?_v=' + Date.now(), { cache:'no-store' });
+    const text = await res.text();
+    const m = text.match(/const APP_VERSION\s*=\s*'([^']+)'/);
+    if(m && m[1] !== APP_VERSION){
+      state.updateAvailable = true;
+      render();
+    }
+  }catch(e){ /* ignore - next check retries */ }
+}
+
+/* ============================= INIT ============================= */
+/* รองรับลิงก์ลึกจากการแจ้งเตือน LINE: ?order=<id>&role=<role> เปิดตรงไปที่ใบแจ้งซ่อมนั้น
+   และสลับบทบาทให้ตรงกับผู้รับแจ้งเตือน (ถ้าบัญชีนี้มีสิทธิ์บทบาทนั้นจริง)
+   ?role=admin&view=settings เปิดตรงไปหน้า "ตั้งค่าข้อมูลหลัก" (ใช้กับลิงก์แจ้งเตือนคำขอสิทธิ์ใหม่ — ดู accessRequestsDeepLink) */
+(async function init(){
+  await authenticate();
+  render();
+  if(state.authStatus !== 'ok'){
+    // หน้า "ขอสิทธิ์เข้าใช้งาน" ใช้ config (แผนก/ชื่อช่าง) ในดรอปดาวน์ — โหลดเบื้องหลังไม่บล็อกฟอร์ม
+    // (เดิมหน้านี้ไม่เคยโหลด config เลย เลยโชว์รายชื่อ default ที่ฝังไว้ในโค้ด ไม่ใช่ของจริงจากชีต)
+    ensureEssentialLoaded().then(render);
+    // ยังไม่มีสิทธิ์ — คอยเช็คให้เอง พอผู้ดูแลกดอนุมัติแล้วหน้านี้จะเข้าระบบทันทีโดยผู้ใช้ไม่ต้องกดอะไร
+    setInterval(recheckAccess, 7000);
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) recheckAccess(); });
+    return;
+  }
+  await ensureEssentialLoaded();
+  render();
+
+  const params = new URLSearchParams(location.search);
+  const linkOrderId = params.get('order');
+  const linkRole = params.get('role');
+  const linkView = params.get('view');
+  if(linkRole && state.allowedRoles.includes(linkRole)){
+    state.role = linkRole;
+    if(linkRole === 'tech') state.myTechName = state.techIdentities[0] || '';
+  }
+  if(linkOrderId){
+    history.replaceState(null, '', location.pathname);
+    // ลัดคิว: ขอใบนี้ใบเดียวจากเซิร์ฟเวอร์ก่อน ให้เห็นหน้ารายละเอียดไวๆ ระหว่างที่รายการเต็มโหลดเบื้องหลัง
+    // อยู่ (ปุ่มที่ต้องบันทึกจะถูกซ่อนไว้จนกว่า loadBackground() จะเสร็จ ดู renderDetail())
+    const peeked = await getOrderById(linkOrderId);
+    if(peeked){ state.orders = [peeked]; await openDetail(linkOrderId); }
+    else render();
+  } else if(linkView === 'settings' && state.role === 'admin'){
+    history.replaceState(null, '', location.pathname);
+    state.view = 'settings';
+    render();
+  } else {
+    render();
+  }
+  loadBackground(); // ไม่ await — โหลดเบื้องหลัง ไม่บล็อกหน้าจอ
+  setInterval(pollForUpdates, 3000);
+  setInterval(checkForUpdate, 120000);
+  // รีเฟรชทันทีเมื่อผู้ใช้กลับมาที่แท็บนี้ (สลับแท็บ/แอปแล้วกลับมา) แทนที่จะรอรอบ poll ถัดไป
+  document.addEventListener('visibilitychange', () => { if(!document.hidden) pollForUpdates(); });
+})();
+</script>
+</body>
+</html>
