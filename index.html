@@ -223,6 +223,11 @@
   .info-toggle summary::-webkit-details-marker{display:none;}
   .info-toggle summary::before{content:'ℹ️ '; }
   .info-toggle p{margin-top:8px;}
+  .auth-warn{background:#fbeae8; border:1px solid #e7b7b1; border-left:4px solid var(--danger);
+    border-radius:8px; padding:10px 12px; margin:10px 0; font-size:12.5px; line-height:1.75; color:#7a2b24;}
+  .auth-note{background:#fbf0dd; border:1px solid #e6cfa4; border-left:4px solid var(--amber-dark);
+    border-radius:8px; padding:10px 12px; margin:10px 0; font-size:12.5px; line-height:1.75; color:#7a5510;}
+  .auth-warn b, .auth-note b{color:inherit;}
 
   .toast-wrap{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; gap:8px; align-items:center;}
   .toast{background:var(--navy); color:#fff; padding:11px 20px; border-radius:8px; font-size:13.5px; box-shadow:0 6px 20px rgba(0,0,0,.2); animation:toastin .18s ease-out;}
@@ -310,6 +315,9 @@ let state = {
   techIdentities: [],
   deviceId: null,   // รหัสประจำเครื่อง/เบราว์เซอร์ ใช้แทน LINE userId เป็นตัวระบุตัวตน
   didHash: '',      // ลายนิ้วมือ (sha256) ของ deviceId — ใช้เป็นคีย์ค้นสิทธิ์ในคำขอที่อนุมัติแล้ว
+  deviceIdPersisted: true, // false = เบราว์เซอร์นี้เก็บรหัสประจำเครื่องไม่ได้ (รหัสจะเปลี่ยนใหม่ทุกครั้งที่เปิดแอป)
+  deviceIdIsNew: false,    // true = รอบนี้ไม่พบรหัสเดิมที่เก็บไว้ จึงเพิ่งสร้างรหัสใหม่ให้
+  lastCheck: null,         // ผลตรวจสิทธิ์ครั้งล่าสุด { at, serverOk, roles } — ไว้บอกผู้ใช้ว่าติดที่ชั้นไหน
   accessRequests: [],
   myRequest: null,
   lineUsers: [],       // ผู้ใช้ LINE ที่ทักเข้ามาหา OA (มาจากแท็บ "LINE Users" ในชีต)
@@ -332,7 +340,7 @@ let state = {
   filterDept: 'ALL',
   updateAvailable: false,
   ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
-    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false,
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false,
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{},
     lineRole:{}, lineTechName:{}, lineName:{}, newLineUserId:'', newLineUserName:'' },
@@ -354,7 +362,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-26.1';
+const APP_VERSION = '2026-08-26.2';
 
 async function storeGet(key){
   try{
@@ -401,14 +409,70 @@ function randomToken(len){
   crypto.getRandomValues(bytes);
   return Array.from(bytes).map(b => b.toString(36).padStart(2,'0')).join('').slice(0, len);
 }
+/* รูปแบบรหัสประจำเครื่องที่ยอมรับ — ใช้ตรวจทั้งค่าที่อ่านจากที่เก็บ (กันขยะ/ค่าที่ถูกตัดกลางคัน)
+   และค่าที่ผู้ใช้วางเองในช่อง "ใช้รหัสประจำเครื่องเดิม" */
+const DEVICE_ID_RE = /^D-[A-Za-z0-9_-]{6,64}$/;
+function isDeviceId(v){ return DEVICE_ID_RE.test(String(v || '').trim()); }
+function readCookie(name){
+  const m = ('; ' + document.cookie).match(new RegExp('; ' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+function writeCookie(name, value){
+  // 365 วัน · path=/ เพื่อให้ใช้ร่วมกันได้ทุกหน้าใต้โดเมนเดียวกัน · Secure เฉพาะบน https (GitHub Pages เป็น https)
+  document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; max-age=31536000; SameSite=Lax'
+    + (location.protocol === 'https:' ? '; Secure' : '');
+}
+/* เขียนรหัสประจำเครื่องลงทั้ง 3 ที่ (localStorage · cookie · sessionStorage) แล้ว "อ่านกลับมาตรวจ"
+   ว่าเก็บติดจริงไหม — คืน true ถ้ามีอย่างน้อยหนึ่งที่ที่อยู่ข้ามการรีเฟรชได้
+   เหตุผลที่ต้องเก็บหลายที่: ในเบราว์เซอร์ของแอป LINE / โหมดส่วนตัว / Safari ที่ล้างข้อมูลเว็บอัตโนมัติ
+   localStorage อาจเขียนไม่ได้หรือถูกล้างทิ้ง ทำให้แอปสร้างรหัสใหม่ทุกครั้งที่เปิด — รหัสที่ผู้ดูแลเพิ่ง
+   ใส่ลงชีตจึงกลายเป็นรหัสเก่าทันทีและเข้าใช้งานไม่ได้สักที (ต่อให้ตอนคัดลอกรหัสมันตรงกันก็ตาม) */
+function persistDeviceId(id){
+  let durable = false;
+  try{
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    durable = localStorage.getItem(DEVICE_ID_KEY) === id;
+  }catch(e){ /* โหมดส่วนตัว/บล็อกคุกกี้ */ }
+  try{
+    writeCookie(DEVICE_ID_KEY, id);
+    if(!durable) durable = readCookie(DEVICE_ID_KEY) === id;
+  }catch(e){ /* คุกกี้ถูกปิด */ }
+  try{ sessionStorage.setItem(DEVICE_ID_KEY, id); }catch(e){ /* อยู่ได้แค่แท็บนี้ ไม่นับเป็น durable */ }
+  return durable;
+}
+function readStoredDeviceId(){
+  let v = '';
+  try{ v = localStorage.getItem(DEVICE_ID_KEY) || ''; }catch(e){ /* อ่านไม่ได้ */ }
+  if(!isDeviceId(v)) v = readCookie(DEVICE_ID_KEY);
+  if(!isDeviceId(v)){ try{ v = sessionStorage.getItem(DEVICE_ID_KEY) || ''; }catch(e){ v = ''; } }
+  return isDeviceId(v) ? String(v).trim() : '';
+}
 function getDeviceId(){
-  let id = null;
-  try{ id = localStorage.getItem(DEVICE_ID_KEY); }catch(e){ /* โหมดส่วนตัว/บล็อกคุกกี้ */ }
-  if(!id){
-    id = 'D-' + randomToken(24);
-    try{ localStorage.setItem(DEVICE_ID_KEY, id); }catch(e){ /* เก็บไม่ได้ = ต้องขอสิทธิ์ใหม่ทุกครั้ง */ }
-  }
+  const found = readStoredDeviceId();
+  const id = found || ('D-' + randomToken(24));
+  state.deviceIdIsNew = !found;
+  // เขียนกลับทุกที่เสมอ ไม่ใช่เฉพาะตอนสร้างใหม่ — ที่เก็บที่ยังรอดจะได้ช่วยกู้ที่เก็บที่ถูกล้างไป
+  state.deviceIdPersisted = persistDeviceId(id);
   return id;
+}
+/* ผูกเครื่องนี้กับรหัสประจำเครื่องเดิมที่ผู้ดูแลใส่ไว้ในชีตแล้ว — ทางออกเมื่อรหัสเดิมหายไป
+   (เปลี่ยนเบราว์เซอร์/เครื่อง, ล้างข้อมูลเว็บ, หรือเบราว์เซอร์เก็บรหัสไม่ได้) จะได้ไม่ต้องไล่เพิ่ม
+   แถวใหม่ในชีตทุกครั้งที่รหัสเปลี่ยน */
+async function useExistingDeviceId(){
+  const raw = (state.ui.deviceIdInput || '').trim();
+  if(!isDeviceId(raw)){ toast('รหัสประจำเครื่องไม่ถูกต้อง — ต้องขึ้นต้นด้วย D- และคัดลอกมาให้ครบทั้งบรรทัด', true); return; }
+  state.deviceIdPersisted = persistDeviceId(raw);
+  state.deviceIdIsNew = false;
+  state.deviceId = raw;
+  state.didHash = await sha256Hex(raw);
+  state.ui.deviceIdInput = '';
+  state.ui.deviceIdTried = true;
+  await resolveAccess();
+  if(state.authStatus === 'ok'){ toast('เข้าใช้งานด้วยรหัสเดิมสำเร็จ'); await startApp(); return; }
+  const c = state.lastCheck;
+  if(c && !c.serverOk) toast('ติดต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true);
+  else toast('ยังไม่พบสิทธิ์ของรหัสนี้ — ตรวจว่าในชีตพิมพ์รหัสตรงกันทุกตัวอักษรหรือยัง', true);
+  render();
 }
 async function sha256Hex(str){
   if(!crypto.subtle) return '';   // ต้องเป็น https เท่านั้น (GitHub Pages เป็น https อยู่แล้ว)
@@ -430,6 +494,9 @@ async function resolveAccess(){
     getUserRoles(state.deviceId),
     storeGet('accessRequests'),
   ]);
+  // เก็บผลดิบไว้โชว์ในหน้า "ขอสิทธิ์เข้าใช้งาน" เพื่อให้แยกออกว่าติดที่ชั้นไหน: ติดต่อเซิร์ฟเวอร์ไม่ได้
+  // (serverOk=false) หรือ ติดต่อได้แต่ไม่พบรหัสนี้ในชีต (serverOk=true แต่ roles ว่าง)
+  state.lastCheck = { at: Date.now(), serverOk: sheet !== null, roles: (sheet && sheet.roles) || [] };
   // sheet===null (getUserRoles ล้มเหลว) หรือ requests===undefined (storeGet ล้มเหลว) แปลว่าเช็คไม่สำเร็จ
   // ไม่ใช่ "ไม่มีสิทธิ์จริงๆ" — ถ้าตอนนี้เข้าใช้งานอยู่แล้ว (authStatus==='ok') ห้ามล้างสิทธิ์ทิ้งเด็ดขาด
   // คงสถานะเดิมไว้ก่อน ไม่งั้นแค่โหลดพลาดครั้งเดียว (เน็ตกระตุก/Apps Script ช้า) จะเด้งคนที่มีสิทธิ์อยู่แล้ว
@@ -475,12 +542,27 @@ async function authenticate(){
   await resolveAccess();
 }
 /* ระหว่างรอผู้ดูแลอนุมัติ ให้เช็คสิทธิ์ซ้ำเป็นระยะ พออนุมัติแล้วจะเข้าระบบให้เองโดยผู้ใช้ไม่ต้องทำอะไร */
-async function recheckAccess(){
+async function recheckAccess(manual){
   if(state.authStatus === 'ok') return;
   const before = state.authStatus;
+  const beforeServerOk = state.lastCheck ? state.lastCheck.serverOk : null;
+  if(manual) state.ui.deviceIdTried = true;
   await resolveAccess();
-  if(state.authStatus === 'ok'){ location.reload(); return; }
-  if(state.authStatus !== before) render();
+  // เข้าระบบต่อในหน้าเดิมเลย ห้าม location.reload() — ถ้าเบราว์เซอร์เก็บรหัสประจำเครื่องไม่ได้
+  // (ดู persistDeviceId) การรีโหลดจะสร้างรหัสใหม่ทันที แล้วเด้งกลับมาหน้าขอสิทธิ์ด้วยรหัสคนละตัว
+  // ทั้งที่เพิ่งได้สิทธิ์ไปหยกๆ — เป็นอาการ "ใส่รหัสในชีตแล้วแต่ยังเข้าไม่ได้สักที"
+  if(state.authStatus === 'ok'){ await startApp(); return; }
+  if(manual){
+    const c = state.lastCheck;
+    if(c && !c.serverOk) toast('ติดต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่', true);
+    else if(state.authStatus === 'pending') toast('ยังรอผู้ดูแลอนุมัติอยู่');
+    else toast('ยังไม่พบสิทธิ์ของรหัสประจำเครื่องนี้ในระบบ', true);
+    render();
+    return;
+  }
+  // เรนเดอร์ใหม่เฉพาะตอนสถานะเปลี่ยนจริงๆ — ไม่งั้นทุก 7 วินาทีจะรื้อ DOM ทิ้งจนเคอร์เซอร์หลุด
+  // จากช่องที่ผู้ใช้กำลังพิมพ์อยู่ในฟอร์มขอสิทธิ์
+  if(state.authStatus !== before || (state.lastCheck && state.lastCheck.serverOk) !== beforeServerOk) render();
 }
 /* เขียนรายการคำขอแบบดึงของล่าสุดมาก่อนเสมอ ลดโอกาสที่สองคนกดพร้อมกันแล้วทับกันเอง */
 async function saveAccessRequests(mutate){
@@ -2090,19 +2172,63 @@ function renderAuthShell(inner){
 /* กล่องสำหรับผู้ดูแลระบบคนแรก (ยังไม่มีใครเป็น admin ในระบบ) — เอารหัสประจำเครื่องไปใส่ในชีตเองได้
    เป็นทางเดียวที่ใช้ตั้ง admin คนแรกได้ หลังจากนั้น admin กดอนุมัติคนอื่นในแอปได้เลย */
 function renderAdminBootstrap(){
+  const id = state.deviceId || '';
+  const chk = state.lastCheck;
+  // เตือนเมื่อเบราว์เซอร์เก็บรหัสประจำเครื่องไม่ได้ — เคสนี้รหัสจะถูกสร้างใหม่ทุกครั้งที่เปิด/รีเฟรชหน้า
+  // แถวที่เพิ่งใส่ลงชีตจึงกลายเป็นรหัสเก่าทันที ทำให้ "ใส่รหัสในชีตแล้วแต่ยังเข้าไม่ได้สักที"
+  const storageWarn = !state.deviceIdPersisted ? `
+    <div class="auth-warn">
+      <b>⚠️ เบราว์เซอร์นี้เก็บรหัสประจำเครื่องไม่ได้</b><br>
+      รหัสด้านล่างจะเปลี่ยนเป็นรหัสใหม่ทุกครั้งที่ปิดแล้วเปิดแอปขึ้นมาใหม่ ถึงใส่ลงชีตไปแล้วก็จะใช้เข้าระบบไม่ได้
+      มักเกิดจากเปิดในเบราว์เซอร์ในตัวแอป LINE หรือเปิดในหน้าต่างไม่ระบุตัวตน (ส่วนตัว/Incognito)<br>
+      <b>วิธีแก้:</b> กดปุ่ม <span class="mono">⋯</span> มุมขวาบน → <b>เปิดในเบราว์เซอร์</b> (Chrome / Safari)
+      แล้วเข้าลิงก์นี้อีกครั้ง จากนั้นค่อยคัดลอกรหัสไปใส่ในชีต
+    </div>` : '';
+  // ถ้าเคยขอสิทธิ์/เคยได้รหัสไว้แล้วแต่รหัสเปลี่ยนไป (เปลี่ยนเครื่อง เปลี่ยนเบราว์เซอร์ ล้างข้อมูลเว็บ)
+  // ไม่ต้องไปเพิ่มแถวใหม่ในชีต — วางรหัสเดิมกลับเข้ามาที่นี่ได้เลย
+  const newIdNote = state.deviceIdIsNew && state.deviceIdPersisted ? `
+    <div class="auth-note">
+      รหัสด้านล่างเป็น <b>รหัสใหม่</b> ที่เพิ่งสร้างให้เครื่องนี้ (ยังไม่พบรหัสเดิมในเบราว์เซอร์นี้)
+      ถ้าเคยใส่รหัสของท่านลงชีตไว้แล้ว ให้วางรหัสเดิมในช่อง "ใช้รหัสประจำเครื่องเดิม" ด้านล่าง
+      แทนการเพิ่มแถวใหม่
+    </div>` : '';
+  const checkNote = chk && !chk.serverOk ? `
+    <div class="auth-warn">
+      <b>⚠️ ติดต่อเซิร์ฟเวอร์ข้อมูล (Google Apps Script) ไม่สำเร็จ</b><br>
+      ตอนนี้ระบบยังตรวจสิทธิ์ไม่ได้เลย จึงยังเข้าใช้งานไม่ได้แม้จะใส่รหัสในชีตถูกต้องแล้ว
+      กรุณาตรวจสอบอินเทอร์เน็ต และให้ผู้ดูแลตรวจว่า Apps Script ตั้ง
+      <span class="mono">Who has access: Anyone</span> ไว้แล้ว
+    </div>` : (state.ui.deviceIdTried && chk && chk.serverOk && !chk.roles.length ? `
+    <div class="auth-note">
+      ตรวจกับชีตแล้ว — <b>ยังไม่พบรหัสประจำเครื่องนี้</b>ในชีต <b>สิทธิ์ผู้ใช้ LINE</b>
+      ให้ตรวจว่าคัดลอกรหัสไปครบทั้งบรรทัด ไม่มีช่องว่างหน้า/หลัง และอยู่ในคอลัมน์
+      <span class="mono">userId</span> ของแท็บนั้นจริงๆ
+    </div>` : '');
   return `
-  <details class="info-toggle" style="margin-top:14px;">
+  <details class="info-toggle" style="margin-top:14px;" ${(!state.deviceIdPersisted || state.ui.deviceIdTried || (chk && !chk.serverOk)) ? 'open' : ''}>
     <summary>สำหรับผู้ดูแลระบบ: ตั้งเครื่องนี้เป็นผู้ดูแลระบบ (admin)</summary>
+    ${storageWarn}${newIdNote}
     <p class="desc" style="font-size:12.5px; color:var(--slate); margin:8px 0;">
       เปิดชีต <b>สิทธิ์ผู้ใช้ LINE</b> แล้วเพิ่ม 1 แถว โดยใส่ 3 ช่องนี้ตามลำดับ:
       <span class="mono">รหัสประจำเครื่อง</span> · <span class="mono">admin</span> · <span class="mono">ชื่อของท่าน</span>
-      แล้วรอประมาณ 7 วินาที หน้านี้จะเข้าระบบให้เอง
+      แล้วรอประมาณ 7 วินาที หน้านี้จะเข้าระบบให้เอง (ห้ามรีเฟรชหน้านี้ระหว่างรอ)
     </p>
     <label class="field-label">รหัสประจำเครื่องของเครื่องนี้</label>
-    <input class="input mono" style="font-size:12px;" readonly value="${escapeHtml(state.deviceId || '')}" onclick="this.select()">
+    <input class="input mono" style="font-size:12px;" readonly value="${escapeHtml(id)}" onclick="this.select()">
     <div class="order-actions" style="margin-top:10px;">
-      <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(state.deviceId || '')}', 'คัดลอกรหัสประจำเครื่องแล้ว')">คัดลอกรหัส</button>
+      <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(id)}', 'คัดลอกรหัสประจำเครื่องแล้ว')">คัดลอกรหัส</button>
       <a class="btn btn-outline btn-sm" href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
+      <button class="btn btn-outline btn-sm" onclick="recheckAccess(true)">ตรวจสอบสิทธิ์ตอนนี้</button>
+    </div>
+    ${checkNote}
+    <label class="field-label" style="margin-top:14px;">ใช้รหัสประจำเครื่องเดิม (เคยใส่ในชีตไว้แล้ว)</label>
+    <input class="input mono" data-fid="deviceIdInput" style="font-size:12px;" placeholder="D-..."
+      value="${escapeHtml(state.ui.deviceIdInput)}" oninput="state.ui.deviceIdInput=this.value">
+    <p class="desc" style="font-size:12px; color:var(--slate); margin:6px 0 0;">
+      วางรหัสเดิมที่อยู่ในชีตแล้วกดปุ่มนี้ เครื่องนี้จะใช้รหัสนั้นแทน ไม่ต้องเพิ่มแถวใหม่ในชีต
+    </p>
+    <div class="order-actions" style="margin-top:10px;">
+      <button class="btn btn-outline btn-sm" onclick="useExistingDeviceId()">ใช้รหัสนี้เข้าใช้งาน</button>
     </div>
   </details>`;
 }
@@ -2126,7 +2252,7 @@ function renderRequestAccess(){
     <div class="card">
       <div class="field">
         <label class="field-label">ชื่อ-นามสกุล <span class="req-star">*</span></label>
-        <input class="input" value="${escapeHtml(u.reqName)}" oninput="state.ui.reqName=this.value" placeholder="เช่น สมชาย ใจดี">
+        <input class="input" data-fid="reqName" value="${escapeHtml(u.reqName)}" oninput="state.ui.reqName=this.value" placeholder="เช่น สมชาย ใจดี">
       </div>
       <div class="field">
         <label class="field-label">แผนก</label>
@@ -2150,7 +2276,7 @@ function renderRequestAccess(){
       </div>` : ''}
       <div class="field">
         <label class="field-label">หมายเหตุถึงผู้ดูแล</label>
-        <input class="input" value="${escapeHtml(u.reqNote)}" oninput="state.ui.reqNote=this.value" placeholder="เช่น เบอร์ติดต่อ หรือข้อมูลยืนยันตัวตน">
+        <input class="input" data-fid="reqNote" value="${escapeHtml(u.reqNote)}" oninput="state.ui.reqNote=this.value" placeholder="เช่น เบอร์ติดต่อ หรือข้อมูลยืนยันตัวตน">
       </div>
       <button class="btn btn-primary btn-block" onclick="submitAccessRequest()" ${u.reqSending ? 'disabled' : ''}>
         ${u.reqSending ? 'กำลังส่งคำขอ...' : 'ส่งคำขอสิทธิ์'}
@@ -2173,7 +2299,7 @@ function renderPendingAccess(){
         <tr><th>ส่งเมื่อ</th><td>${r.at ? escapeHtml(fmtDateTime(r.at)) : '-'}</td></tr>
       </table>
       <div class="order-actions" style="margin-top:14px; justify-content:center;">
-        <button class="btn btn-outline btn-sm" onclick="recheckAccess()">ตรวจสอบสถานะตอนนี้</button>
+        <button class="btn btn-outline btn-sm" onclick="recheckAccess(true)">ตรวจสอบสถานะตอนนี้</button>
         <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">แก้ไข / ยกเลิกคำขอ</button>
       </div>
     </div>
@@ -2187,7 +2313,8 @@ function renderRejectedAccess(){
       <h2 class="view-title" style="margin-top:6px;">คำขอสิทธิ์ไม่ได้รับการอนุมัติ</h2>
       <p class="view-sub">คำขอของ "${escapeHtml(r.name || '-')}" ถูกปฏิเสธโดยผู้ดูแลระบบ หากเข้าใจว่าเป็นความเข้าใจผิด กรุณาติดต่อผู้ดูแลระบบ แล้วส่งคำขอใหม่ได้</p>
       <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">ส่งคำขอใหม่</button>
-    </div>`);
+    </div>
+    ${renderAdminBootstrap()}`);
 }
 
 /* ============================= MAIN RENDER ============================= */
@@ -2291,18 +2418,12 @@ async function checkForUpdate(){
 /* รองรับลิงก์ลึกจากการแจ้งเตือน LINE: ?order=<id>&role=<role> เปิดตรงไปที่ใบแจ้งซ่อมนั้น
    และสลับบทบาทให้ตรงกับผู้รับแจ้งเตือน (ถ้าบัญชีนี้มีสิทธิ์บทบาทนั้นจริง)
    ?role=admin&view=settings เปิดตรงไปหน้า "ตั้งค่าข้อมูลหลัก" (ใช้กับลิงก์แจ้งเตือนคำขอสิทธิ์ใหม่ — ดู accessRequestsDeepLink) */
-(async function init(){
-  await authenticate();
-  render();
-  if(state.authStatus !== 'ok'){
-    // หน้า "ขอสิทธิ์เข้าใช้งาน" ใช้ config (แผนก/ชื่อช่าง) ในดรอปดาวน์ — โหลดเบื้องหลังไม่บล็อกฟอร์ม
-    // (เดิมหน้านี้ไม่เคยโหลด config เลย เลยโชว์รายชื่อ default ที่ฝังไว้ในโค้ด ไม่ใช่ของจริงจากชีต)
-    ensureEssentialLoaded().then(render);
-    // ยังไม่มีสิทธิ์ — คอยเช็คให้เอง พอผู้ดูแลกดอนุมัติแล้วหน้านี้จะเข้าระบบทันทีโดยผู้ใช้ไม่ต้องกดอะไร
-    setInterval(recheckAccess, 7000);
-    document.addEventListener('visibilitychange', () => { if(!document.hidden) recheckAccess(); });
-    return;
-  }
+/* เข้าสู่แอปจริง (หลังยืนยันสิทธิ์แล้ว) — แยกออกมาจาก init() เพื่อให้เรียกซ้ำได้ตอนผู้ใช้เพิ่งได้สิทธิ์
+   ระหว่างอยู่หน้า "ขอสิทธิ์เข้าใช้งาน" โดยไม่ต้อง location.reload() (ดูเหตุผลใน recheckAccess) */
+let appStarted = false;
+async function startApp(){
+  if(appStarted) return;
+  appStarted = true;
   await ensureEssentialLoaded();
   render();
 
@@ -2333,6 +2454,21 @@ async function checkForUpdate(){
   setInterval(checkForUpdate, 120000);
   // รีเฟรชทันทีเมื่อผู้ใช้กลับมาที่แท็บนี้ (สลับแท็บ/แอปแล้วกลับมา) แทนที่จะรอรอบ poll ถัดไป
   document.addEventListener('visibilitychange', () => { if(!document.hidden) pollForUpdates(); });
+}
+
+(async function init(){
+  await authenticate();
+  render();
+  if(state.authStatus !== 'ok'){
+    // หน้า "ขอสิทธิ์เข้าใช้งาน" ใช้ config (แผนก/ชื่อช่าง) ในดรอปดาวน์ — โหลดเบื้องหลังไม่บล็อกฟอร์ม
+    // (เดิมหน้านี้ไม่เคยโหลด config เลย เลยโชว์รายชื่อ default ที่ฝังไว้ในโค้ด ไม่ใช่ของจริงจากชีต)
+    ensureEssentialLoaded().then(render);
+    // ยังไม่มีสิทธิ์ — คอยเช็คให้เอง พอผู้ดูแลกดอนุมัติแล้วหน้านี้จะเข้าระบบทันทีโดยผู้ใช้ไม่ต้องกดอะไร
+    setInterval(recheckAccess, 7000);
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) recheckAccess(); });
+    return;
+  }
+  await startApp();
 })();
 </script>
 </body>

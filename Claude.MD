@@ -89,6 +89,35 @@ Bootstrapping the first `admin` is the one manual step: the guest and
 waiting screens both expose that browser's own device id with a copy
 button, to be pasted by hand into `สิทธิ์ผู้ใช้ LINE` as
 `D-... | admin | <name>`.
+Device-id durability — the device id is the whole credential, so losing
+it looks exactly like "I put my code in the sheet and still can't get in".
+It used to live in `localStorage` alone, silently regenerating on any
+browser that couldn't keep it (LINE's in-app browser, private windows,
+Safari clearing site data), which meant the row an admin had just pasted
+into the sheet was already stale. Now `persistDeviceId()` writes it to
+`localStorage` + a 365-day cookie + `sessionStorage`, reads it back to
+confirm at least one store is durable, and `readStoredDeviceId()` tries
+all three in that order — so a surviving store re-seeds the wiped ones.
+When nothing is durable (`state.deviceIdPersisted === false`) the guest
+screen says so outright and tells the user to reopen the link in Chrome
+or Safari, instead of handing out a code that will not survive.
+Two follow-ons from the same root cause:
+`recheckAccess()` must never `location.reload()` on success. A reload
+re-runs `getDeviceId()`, so on a non-durable browser the user was thrown
+straight back to the request-access screen holding a *different* code,
+seconds after being granted access. It now calls `startApp()` (the
+post-auth half of `init()`, split out and guarded by `appStarted`) and
+enters the app in place, keeping the in-memory id.
+The guest screen has a "ใช้รหัสประจำเครื่องเดิม" box
+(`useExistingDeviceId()`) to paste a code that is already in the sheet.
+That is the recovery path for a changed browser/device or a wiped store —
+without it the only remedy was appending yet another row to the sheet for
+the same person, which is how duplicate `D-...` admin rows appeared.
+`resolveAccess()` records `state.lastCheck = { at, serverOk, roles }` so
+the guest screen can distinguish "couldn't reach Apps Script" from
+"reached it, this code isn't in the sheet". The second message is gated
+behind `state.ui.deviceIdTried` so first-time visitors, for whom having no
+row is normal, aren't nagged by it.
 Focus preservation: because `render()` destroys/recreates every DOM
 node, any input that re-renders on `oninput` would normally lose focus
 after one keystroke. Fixed via a `data-fid="..."` attribute on such
