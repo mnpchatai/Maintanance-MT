@@ -362,7 +362,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-26.2';
+const APP_VERSION = '2026-08-26.3';
 
 async function storeGet(key){
   try{
@@ -2211,7 +2211,9 @@ function renderAdminBootstrap(){
     <p class="desc" style="font-size:12.5px; color:var(--slate); margin:8px 0;">
       เปิดชีต <b>สิทธิ์ผู้ใช้ LINE</b> แล้วเพิ่ม 1 แถว โดยใส่ 3 ช่องนี้ตามลำดับ:
       <span class="mono">รหัสประจำเครื่อง</span> · <span class="mono">admin</span> · <span class="mono">ชื่อของท่าน</span>
-      แล้วรอประมาณ 7 วินาที หน้านี้จะเข้าระบบให้เอง (ห้ามรีเฟรชหน้านี้ระหว่างรอ)
+      แล้วรอประมาณ 7 วินาที หน้านี้จะเข้าระบบให้เอง (ห้ามรีเฟรชหน้านี้ระหว่างรอ)<br>
+      ขั้นตอนนี้<b>ไม่ต้องรอใครอนุมัติ</b> — เป็นทางเดียวที่ใช้ตั้งผู้ดูแลระบบคนแรกได้ตอนที่ยังไม่มีใครเป็น admin
+      และใช้ให้สิทธิ์บทบาทอื่นได้ทุกบทบาทเช่นกัน พอมี admin เข้าระบบได้แล้วจะกดอนุมัติคำขอที่ค้างอยู่ในแอปได้เลย
     </p>
     <label class="field-label">รหัสประจำเครื่องของเครื่องนี้</label>
     <input class="input mono" style="font-size:12px;" readonly value="${escapeHtml(id)}" onclick="this.select()">
@@ -2284,6 +2286,30 @@ function renderRequestAccess(){
     </div>
     ${renderAdminBootstrap()}`);
 }
+/* ทางออกเมื่อ "ยังไม่มีใครเป็น admin" หรือ admin เข้าแอปไม่ได้ — คำขอที่ค้างอยู่จะไม่มีใครกดอนุมัติ
+   ให้ได้เลย แต่ชีต "สิทธิ์ผู้ใช้ LINE" ให้สิทธิ์ได้ทุกบทบาทโดยไม่ต้องผ่านแอป ปัญหาเดียวคือคำขอที่เก็บ
+   บนเซิร์ฟเวอร์บันทึกแค่ didHash (sha256) ไม่ได้เก็บรหัสตัวจริง ผู้ดูแลจึงอ่านรหัสของผู้ขอจากรายการ
+   คำขอไม่ได้ — ผู้ขอต้องเป็นคนส่งรหัสของตัวเองไปให้ (ทาง LINE ฯลฯ) กล่องนี้จึงต้องเห็นชัด ไม่ซ่อน
+   ไว้ใน <details> เหมือนกล่องของผู้ดูแล */
+function renderSheetGrantFallback(){
+  const id = state.deviceId || '';
+  return `
+  <div class="card" style="margin-top:14px;">
+    <b style="color:var(--navy); font-size:14.5px;">รอนานแล้วยังไม่ได้รับอนุมัติ?</b>
+    <p class="desc" style="font-size:12.5px; color:var(--slate); margin:8px 0;">
+      ผู้ดูแลระบบให้สิทธิ์ท่านได้โดยตรงจาก Google Sheet โดย<b>ไม่ต้องเข้าแอป</b> —
+      ส่งรหัสประจำเครื่องด้านล่างนี้ให้ผู้ดูแล แล้วให้เปิดชีต <b>สิทธิ์ผู้ใช้ LINE</b>
+      เพิ่ม 1 แถว โดยใส่ 3 ช่องนี้ตามลำดับ:
+      <span class="mono">รหัสนี้</span> · <span class="mono">บทบาท</span> · <span class="mono">ชื่อของท่าน</span>
+      จากนั้นหน้านี้จะเข้าระบบให้เองภายในไม่กี่วินาที
+    </p>
+    <label class="field-label">รหัสประจำเครื่องของท่าน</label>
+    <input class="input mono" style="font-size:12px;" readonly value="${escapeHtml(id)}" onclick="this.select()">
+    <div class="order-actions" style="margin-top:10px;">
+      <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(id)}', 'คัดลอกรหัสประจำเครื่องแล้ว')">คัดลอกรหัสไปส่งให้ผู้ดูแล</button>
+    </div>
+  </div>`;
+}
 function renderPendingAccess(){
   const r = state.myRequest || {};
   return renderAuthShell(`
@@ -2303,6 +2329,7 @@ function renderPendingAccess(){
         <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">แก้ไข / ยกเลิกคำขอ</button>
       </div>
     </div>
+    ${renderSheetGrantFallback()}
     ${renderAdminBootstrap()}`);
 }
 function renderRejectedAccess(){
