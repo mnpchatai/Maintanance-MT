@@ -113,6 +113,26 @@ The guest screen has a "ใช้รหัสประจำเครื่อ�
 That is the recovery path for a changed browser/device or a wiped store —
 without it the only remedy was appending yet another row to the sheet for
 the same person, which is how duplicate `D-...` admin rows appeared.
+No-admin deadlock and why there isn't one: `admin` is deliberately not
+requestable — `renderRequestAccess()` filters it out of the role list and
+`submitAccessRequest()` rejects it — so the first `admin` can only come from
+a hand-typed sheet row. That row needs nobody's approval, which is exactly
+what breaks the "no admin exists, so no one can approve anything" cycle.
+Once one admin is in, `renderAccessRequests()`'s role checkboxes iterate
+`Object.keys(ROLES)`, `admin` included, so further admins are appointed
+in-app and the bootstrap is never needed again. Appoint a second one — a
+single admin who loses their device id puts the system back at the
+bootstrap step.
+The sheet is a complete bypass of the in-app approval flow for *every*
+role, not just `admin`, so a stranded queue of pending requests is always
+recoverable. The one thing a sheet-only admin cannot do is read a
+requester's device id out of the pending request — requests store only
+`didHash` by design (see above), so the requester has to send their own
+code over. `renderSheetGrantFallback()` on the waiting screen exists for
+that: it shows the waiting user their own device id un-collapsed, with a
+copy button and instructions to send it to the admin. Keep it out of a
+`<details>` — the admin bootstrap box next to it is collapsed and titled
+for admins, which is why an ordinary waiting user never found their code.
 `resolveAccess()` records `state.lastCheck = { at, serverOk, roles }` so
 the guest screen can distinguish "couldn't reach Apps Script" from
 "reached it, this code isn't in the sheet". The second message is gated
