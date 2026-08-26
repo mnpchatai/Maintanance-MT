@@ -340,7 +340,7 @@ let state = {
   filterDept: 'ALL',
   updateAvailable: false,
   ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
-    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false,
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null,
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{},
     lineRole:{}, lineTechName:{}, lineName:{}, newLineUserId:'', newLineUserName:'' },
@@ -362,7 +362,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-26.3';
+const APP_VERSION = '2026-08-26.4';
 
 async function storeGet(key){
   try{
@@ -454,6 +454,38 @@ function getDeviceId(){
   // เขียนกลับทุกที่เสมอ ไม่ใช่เฉพาะตอนสร้างใหม่ — ที่เก็บที่ยังรอดจะได้ช่วยกู้ที่เก็บที่ถูกล้างไป
   state.deviceIdPersisted = persistDeviceId(id);
   return id;
+}
+/* ทดสอบการเชื่อมต่อ Apps Script แบบเห็นคำตอบดิบๆ — เอาไว้ชี้ว่าอาการ "ใส่รหัสในชีตแล้วแต่ยังเข้าไม่ได้"
+   ติดอยู่ชั้นไหนกันแน่ ระหว่าง (1) เข้าเซิร์ฟเวอร์ไม่ได้เลย (2) เซิร์ฟเวอร์ตอบคำขออื่นได้แต่ userRoles
+   ไม่คืนสิทธิ์ ทั้งที่แถวในชีตถูกต้อง — มักแปลว่าโค้ดส่วน userRoles ในสคริปต์หายไปตอนวางโค้ดไม่ครบ
+   (3) เซิร์ฟเวอร์บอกว่ามีสิทธิ์แล้ว แปลว่าปัญหาอยู่ฝั่งแอป ไม่ใช่ชีต */
+async function probeUrl(url){
+  try{
+    const res = await fetch(url);
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text: text.slice(0, 500) };
+  }catch(e){ return { ok:false, status:0, text: 'fetch ล้มเหลว: ' + String((e && e.message) || e) }; }
+}
+async function runConnectionTest(){
+  const id = state.deviceId || '';
+  const rolesUrl = API_URL + '?key=userRoles&userId=' + encodeURIComponent(id);
+  state.ui.connTest = { running:true, url: rolesUrl };
+  render();
+  const [roles, kv] = await Promise.all([probeUrl(rolesUrl), probeUrl(API_URL + '?key=accessRequests')]);
+  let granted = null;
+  try{ const j = JSON.parse(roles.text); granted = j.value ? JSON.parse(j.value) : null; }catch(e){ /* ไม่ใช่ JSON */ }
+  let verdict;
+  if(!roles.ok && !kv.ok){
+    verdict = '❌ เข้าถึง Apps Script ไม่ได้เลย — เปิด Apps Script → Deploy → Manage deployments → แก้ไข (ดินสอ) → ตั้ง "Who has access" เป็น Anyone แล้ว Deploy ใหม่ และตรวจว่า /exec ตรงกับที่ฝังในแอป';
+  } else if(granted && (granted.roles || []).length){
+    verdict = '✅ เซิร์ฟเวอร์ตอบว่ารหัสนี้มีสิทธิ์: ' + (granted.roles || []).join(', ') + ' — กด "ตรวจสอบสิทธิ์ตอนนี้" อีกครั้งเพื่อเข้าระบบ';
+  } else if(kv.ok){
+    verdict = '⚠️ Apps Script ตอบคำขออื่นได้ปกติ แต่ userRoles ไม่คืนสิทธิ์ของรหัสนี้ ทั้งที่มีแถวในชีตแล้ว — มักแปลว่าโค้ดส่วน userRoles/readUserRoles_ ในสคริปต์หายไปหรือไม่ครบ ให้วางโค้ด Apps Script ใหม่ทั้งไฟล์ (แทนที่ทั้งหมด) แล้ว Deploy → Manage deployments → Version: New version';
+  } else {
+    verdict = '⚠️ ผลไม่ชัดเจน — ลองกดทดสอบอีกครั้ง';
+  }
+  state.ui.connTest = { at: Date.now(), url: rolesUrl, verdict, roles, kv };
+  render();
 }
 /* ผูกเครื่องนี้กับรหัสประจำเครื่องเดิมที่ผู้ดูแลใส่ไว้ในชีตแล้ว — ทางออกเมื่อรหัสเดิมหายไป
    (เปลี่ยนเบราว์เซอร์/เครื่อง, ล้างข้อมูลเว็บ, หรือเบราว์เซอร์เก็บรหัสไม่ได้) จะได้ไม่ต้องไล่เพิ่ม
@@ -2204,8 +2236,16 @@ function renderAdminBootstrap(){
       ให้ตรวจว่าคัดลอกรหัสไปครบทั้งบรรทัด ไม่มีช่องว่างหน้า/หลัง และอยู่ในคอลัมน์
       <span class="mono">userId</span> ของแท็บนั้นจริงๆ
     </div>` : '');
+  const ct = state.ui.connTest;
+  const pre = (label, r) => `<div style="margin-top:6px;"><b>${escapeHtml(label)}</b> — HTTP ${r.status || 'ล้มเหลว'}<pre style="white-space:pre-wrap; word-break:break-all; font-size:11.5px; background:#efece4; border-radius:6px; padding:8px; margin:4px 0 0; max-height:160px; overflow:auto;">${escapeHtml(r.text || '')}</pre></div>`;
+  const ctBox = !ct ? '' : (ct.running ? `<div class="auth-note">กำลังทดสอบการเชื่อมต่อ...</div>` : `
+    <div class="auth-note">
+      <b>ผลการทดสอบ</b><br>${escapeHtml(ct.verdict)}
+      ${pre('userRoles (รหัสเครื่องนี้)', ct.roles)}
+      ${pre('accessRequests (คำขอสิทธิ์)', ct.kv)}
+    </div>`);
   return `
-  <details class="info-toggle" style="margin-top:14px;" ${(!state.deviceIdPersisted || state.ui.deviceIdTried || (chk && !chk.serverOk)) ? 'open' : ''}>
+  <details class="info-toggle" style="margin-top:14px;" ${(!state.deviceIdPersisted || state.ui.deviceIdTried || ct || (chk && !chk.serverOk)) ? 'open' : ''}>
     <summary>สำหรับผู้ดูแลระบบ: ตั้งเครื่องนี้เป็นผู้ดูแลระบบ (admin)</summary>
     ${storageWarn}${newIdNote}
     <p class="desc" style="font-size:12.5px; color:var(--slate); margin:8px 0;">
@@ -2223,6 +2263,11 @@ function renderAdminBootstrap(){
       <button class="btn btn-outline btn-sm" onclick="recheckAccess(true)">ตรวจสอบสิทธิ์ตอนนี้</button>
     </div>
     ${checkNote}
+    <div class="order-actions" style="margin-top:10px;">
+      <button class="btn btn-outline btn-sm" onclick="runConnectionTest()">🔍 ทดสอบการเชื่อมต่อเซิร์ฟเวอร์</button>
+      ${ct && ct.url ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(ct.url)}" target="_blank" rel="noopener">เปิดคำตอบดิบ →</a>` : ''}
+    </div>
+    ${ctBox}
     <label class="field-label" style="margin-top:14px;">ใช้รหัสประจำเครื่องเดิม (เคยใส่ในชีตไว้แล้ว)</label>
     <input class="input mono" data-fid="deviceIdInput" style="font-size:12px;" placeholder="D-..."
       value="${escapeHtml(state.ui.deviceIdInput)}" oninput="state.ui.deviceIdInput=this.value">

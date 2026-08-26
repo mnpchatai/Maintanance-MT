@@ -426,3 +426,22 @@ Script "คำร้องแจ้งซ่อม" mirror code (not in this rep
 formatting — that dropdown/color list needs to be updated by hand to
 include it, the same way the `technicians` field needed a manual mirror
 update.
+Diagnosing "the code is in the sheet but I still can't get in" — the guest
+screen's admin box has a `runConnectionTest()` button that probes
+`doGet('userRoles', <this device id>)` and `doGet('accessRequests')` and
+prints both raw responses plus a verdict. The three outcomes map to three
+different layers, which is the whole point of probing two endpoints rather
+than one:
+both fail → the Web App is unreachable (usually "Who has access" is not
+"Anyone" after a fresh deploy, or `API_URL` points at a stale `/exec`);
+`accessRequests` answers but `userRoles` returns `{"value":null}` for an id
+that *is* in the sheet → the script's `userRoles` branch or
+`readUserRoles_()` is missing, so the request falls through to the generic
+KV lookup and finds no `userRoles` row. Re-paste the entire Apps Script
+file and redeploy as a new version — this is exactly the partial-paste
+failure the Architecture section warns about;
+`userRoles` returns roles → the server is fine and the problem is
+client-side.
+Note the `บันทึกข้อผิดพลาด` tab and the KV rows are migrated historical
+data — timestamps there predating the migration prove nothing about
+whether the current deployment works. Check the live endpoint, not the tab.
