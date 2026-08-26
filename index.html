@@ -339,16 +339,22 @@ let state = {
 };
 
 /* ============================= STORAGE HELPERS (Google Sheets via Apps Script) ============================= */
-const API_URL = 'https://script.google.com/macros/s/AKfycbyJFozkOTsGdJGMjWfYAFT2riy_i94ap1dJKqK77QHintDQEcXPxAdv6140ZAaVPa5srA/exec';
-const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k/edit';
-const APP_URL = 'https://thtwgot-kh.github.io/maintenance-request/';
+/* ย้ายบัญชี Google (mnpchatai@gmail.com) เมื่อ 26 ส.ค. 2569 — ทั้งชีตข้อมูลดิบและ Apps Script
+   ทั้งสองตัวถูกสร้างใหม่บนบัญชีใหม่ URL เดิมของบัญชีเก่าใช้ไม่ได้แล้ว */
+const API_URL = 'https://script.google.com/macros/s/AKfycbz-pSExguiKyW0irQMBzOyynYgevpC5gJHkI8YKu5mR-9KK3tX2OCKmsuP57GAZ-dQDBQ/exec';
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1Zm31RC9ak_plSb19LsgGn8QJn4EkadYOnKUF98dyAwA/edit';
+const APP_URL = 'https://mnpchatai.github.io/Maintanance-MT/';
+/* URL ของ Apps Script "LineOA MT" (relay ส่งข้อความเข้า LINE) — กำหนดไว้ในโค้ดเพื่อให้ย้ายบัญชีแล้ว
+   ใช้งานได้ทันที ไม่ต้องพึ่งค่าเดิมที่ค้างอยู่ในชีต (คีย์ lineWebhooks ยังชี้ไปสคริปต์ของบัญชีเก่าที่ตายแล้ว)
+   ค่าคงที่นี้จะถูกใช้ก่อนเสมอ ถ้าต้องการกลับไปใช้ค่าที่ตั้งจากหน้า "ตั้งค่าข้อมูลหลัก" ให้ตั้งเป็นสตริงว่าง */
+const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiIneomcuE6kOrg9vCE-giPzHePLgGh6vvXei283TLgDqNGaIRJrw/exec';
 /* คีย์ใน localStorage ที่เก็บ "รหัสประจำเครื่อง" — ตัวระบุตัวตนของผู้ใช้แทน LINE userId
    (เดิมระบบบังคับล็อกอินผ่าน LINE LIFF ซึ่งใช้ได้เฉพาะเจ้าของ/ผู้ทดสอบของ LINE Login channel
    ที่ยังอยู่สถานะ Developing เท่านั้น ทำให้พนักงานคนอื่นเข้าไม่ได้เลย จึงเลิกใช้ LIFF ทั้งหมด) */
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-13.1';
+const APP_VERSION = '2026-08-26.1';
 
 async function storeGet(key){
   try{
@@ -770,18 +776,23 @@ function lineRecipientsForRole(role){
     return (m.roles || []).includes(role) || (m.techName && m.techName === role);
   });
 }
+/* URL ปลายทางของ relay LINE: ใช้ค่าคงที่ LINE_RELAY_URL ก่อน แล้วจึงค่อยตกไปใช้ค่าที่ตั้งไว้ในชีต
+   (จำเป็นตอนย้ายบัญชี — ค่าในชีตยังเป็น URL ของสคริปต์บัญชีเก่าซึ่งยิงไปก็ไม่มีอะไรเกิดขึ้น) */
+function lineRelayUrl(role){
+  if(LINE_RELAY_URL) return LINE_RELAY_URL;
+  const hooks = state.config.lineWebhooks || {};
+  return (role && hooks[role]) || Object.values(hooks).find(Boolean) || '';
+}
 async function sendLineToUserIds(userIds, message){
   if(!userIds || !userIds.length) return;
-  const hooks = state.config.lineWebhooks || {};
-  const url = Object.values(hooks).find(Boolean);
+  const url = lineRelayUrl();
   if(!url) return;
   try{
     await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ userIds, message, at: nowIso() }) });
   }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
 }
 async function tryLineWebhook(role, message){
-  const hooks = state.config.lineWebhooks || {};
-  const url = hooks[role] || Object.values(hooks).find(Boolean);
+  const url = lineRelayUrl(role);
   if(!url) return;
   // ส่ง userIds ไปด้วยเพื่อให้สคริปต์ LINE relay ยิงตรงถึงคนที่ admin กำหนดไว้ได้
   // (ถ้า relay เวอร์ชันเก่ายังไม่รองรับฟิลด์นี้ ก็จะถูกมองข้ามไปเฉยๆ พฤติกรรมเดิมไม่เปลี่ยน)
@@ -2033,7 +2044,10 @@ function renderSettings(){
       <summary>LINE Notify ปิดให้บริการแล้ว — อ่านเพิ่มเติม</summary>
       <p class="desc" style="margin-top:-2px;">ปิดให้บริการตั้งแต่ 31 มี.ค. 2568 การส่งข้อความ LINE จริงในปัจจุบันต้องใช้ LINE Official Account + Messaging API ซึ่งต้องมีระบบหลังบ้าน (server) เก็บ token อย่างปลอดภัย — ไม่สามารถฝังไว้ในหน้าเว็บนี้ได้โดยตรง ระบบนี้จึงมี "การแจ้งเตือนในระบบ" ให้ใช้งานได้ทันที และมีช่อง Webhook URL ด้านล่างสำหรับต่อยอด: หากท่านตั้งค่า relay ผ่าน Google Apps Script / n8n / Make.com ที่รับ POST แล้วส่งต่อเข้า LINE Messaging API เอง ระบบจะยิงข้อมูลไปที่ URL นั้นให้อัตโนมัติทุกครั้งที่มีการเปลี่ยนสถานะ</p>
     </details>
-    <table class="mini"><tr><th>บทบาท</th><th>Webhook URL</th></tr>${webhookRows}</table>
+    <div class="summary-link">
+      <div class="txt">URL relay ที่ใช้งานจริงตอนนี้ ${LINE_RELAY_URL ? '(กำหนดไว้ในโค้ด — แก้ไขที่ index.html แล้ว push ขึ้น GitHub)' : '(ใช้ค่าจากตารางด้านล่าง)'}<br><span class="mono" style="word-break:break-all;">${escapeHtml(lineRelayUrl() || 'ยังไม่ได้ตั้งค่า')}</span></div>
+    </div>
+    <table class="mini"><tr><th>บทบาท</th><th>Webhook URL${LINE_RELAY_URL ? ' (สำรอง — ไม่ถูกใช้ขณะที่กำหนดค่าในโค้ดไว้)' : ''}</th></tr>${webhookRows}</table>
     <div class="inline-form">
       <select class="input" onchange="state.ui.newWebhookRole=this.value">${webhookRoleOpts}</select>
       <input class="input" data-fid="newWebhookUrl" placeholder="https://..." oninput="state.ui.newWebhookUrl=this.value">

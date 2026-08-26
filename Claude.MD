@@ -3,11 +3,24 @@ Single-page Thai-language web app for submitting and tracking machine repair
 requests through a multi-step approval workflow (factory manager → general
 manager → technician assignment → repair).
 Live URLs
-App: https://thtwgot-kh.github.io/maintenance-request/ (GitHub Pages,
-deploys automatically from `main`)
+App: https://mnpchatai.github.io/Maintanance-MT/ (GitHub Pages,
+deploys automatically from `main` — the served file must stay named
+`index.html` at the repo root)
 Database (Google Sheet):
-https://docs.google.com/spreadsheets/d/1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k/edit
-Repo: `thtwgot-Kh/maintenance-request` on GitHub
+https://docs.google.com/spreadsheets/d/1Zm31RC9ak_plSb19LsgGn8QJn4EkadYOnKUF98dyAwA/edit
+Repo: `mnpchatai/Maintanance-MT` on GitHub
+
+Google account migration (26 Aug 2026) — everything moved from the old
+`thtwgot-Kh` GitHub account and its Google account to `mnpchatai@gmail.com`.
+The Sheet, both Apps Script projects and the GitHub repo were all recreated
+there, so every old `/exec` URL, the old Sheet id and the old Pages URL are
+dead. The four URLs that live in code are now `API_URL`, `SHEET_URL`,
+`APP_URL` and `LINE_RELAY_URL` at the top of `index.html`. Two things still
+have to be redone by hand inside the Apps Script editor on the new account
+(they are not in this repo): the LINE relay's `SPREADSHEET_ID` must point at
+the new Sheet id above, and `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_CHANNEL_SECRET`
+must be re-entered there; the LINE Developers Console → Messaging API →
+Webhook URL field must also be repointed at the new relay `/exec` URL.
 Architecture
 Everything the browser needs is one file: `index.html` (vanilla JS, no
 build step, no framework — a hand-rolled `state` object + `render()` that
@@ -33,9 +46,10 @@ Their source is only ever pasted by hand into the Apps Script editor — see
 paste the entire file, replacing everything (partial pastes have broken
 things before by deleting helper functions).
 1. `index.html` — the client
-Constants near the top: `API_URL` (main data API) and `SHEET_URL` (link
-shown in Settings). Update these here and push to `main` if either Apps
-Script gets redeployed to a new URL.
+Constants near the top: `API_URL` (main data API), `SHEET_URL` (link
+shown in Settings), `APP_URL` (used to build notification deep links) and
+`LINE_RELAY_URL` (the "LineOA MT" relay). Update these here and push to
+`main` if either Apps Script gets redeployed to a new URL.
 `state` is a single global object; `render()` rebuilds `#app` via
 `innerHTML` on every change (no virtual DOM).
 Login & access control — no LINE login at all. The app used to gate
@@ -211,9 +225,16 @@ ping simply isn't sent — see the no-broadcast-fallback note above.
 the app; the per-name row is what makes the assignment ping personal.)
 `tryLineWebhook(role, message)` in `index.html` no longer requires a
 webhook URL configured under that exact `role` key in Settings — it
-falls back to whichever webhook URL is configured (they're always the
-same "LineOA MT" `/exec` URL in practice), so technician names never
-need their own row in the Settings → LINE Webhook table.
+resolves the target through `lineRelayUrl(role)`, which returns the
+`LINE_RELAY_URL` constant when set and only otherwise falls back to
+whichever webhook URL is configured in Settings (they're always the same
+"LineOA MT" `/exec` URL in practice), so technician names never need
+their own row in the Settings → LINE Webhook table.
+The constant deliberately wins over the Settings table: the migrated
+`lineWebhooks` rows still carry the old account's dead relay URL, and
+posting there fails silently. The Settings page shows the URL actually in
+use and marks the table as a fallback while the constant is set. To go back
+to configuring the relay from Settings, set `LINE_RELAY_URL` to `''`.
 `tryLineWebhook` now also posts a `userIds` array alongside
 `role`/`message`, resolved client-side from the `lineUserRoles` KV map
 that `admin` fills in via ตั้งค่าข้อมูลหลัก → กำหนดบทบาทผู้ใช้ LINE
