@@ -163,6 +163,32 @@ triggers a CORS preflight that silently fails. The receiving script still
 Container-bound to the Database spreadsheet (open the Sheet → Extensions →
 Apps Script to edit it). Deployed as a Web App (Execute as: Me, Who has
 access: Anyone) at the URL in `API_URL`.
+Being container-bound does NOT mean it reads its container. Every data
+access goes through `getSpreadsheet_()`, which is
+`SpreadsheetApp.openById(SPREADSHEET_ID)` — a hardcoded id at the top of the
+script. Only the `onEdit` doc-form path uses
+`getActiveSpreadsheet()` (a simple trigger may not call `openById`). So the
+script can happily serve requests against a completely different
+spreadsheet from the one it is attached to, and nothing in the UI hints at
+it. That is exactly what happened after the account migration: the new
+script kept `SPREADSHEET_ID` pointing at the old account's Sheet
+(`1er3WPCH…`, owner `thtwgot@gmail.com`) while everyone edited the new one
+(`1Zm31RC9…`). The symptom was `doGet('userRoles')` returning
+`{"roles":[],"techNames":[]}` for a device id that was plainly sitting in
+the new Sheet — every other endpoint looked healthy, because the old Sheet
+was a copy and still held all the pre-migration data. `SPREADSHEET_ID` is
+therefore the FIRST thing to check whenever the app and the Sheet disagree,
+and it belongs on the migration checklist alongside the relay's copy of it.
+`doGet('whoami')` returns the id and name of the Sheet the running
+deployment actually uses — check it before debugging anything else.
+Two things made this hide for longer than it should have:
+`readUserRoles_()` used `getOrCreateSheet_()`, so a missing permissions tab
+was silently created empty and the lookup returned no roles instead of
+failing — it also meant read-only auth checks kept writing to the wrong
+spreadsheet. It now uses `getSheetByName()` and returns empty without
+creating anything. Roles are also lowercased and de-duplicated on read, so
+`Admin` in the sheet works.
+
 Two-tier storage model:
 KV sheet (`KV` tab): generic key→JSON-string store. Keys in use:
 `orders`, `counters`, `notifications`, `photos:<id>`, `lineWebhooks`,
