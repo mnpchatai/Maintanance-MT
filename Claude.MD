@@ -117,7 +117,12 @@ tab, or the legacy `lineUserRoles[id].name`); the parenthesised one is the
 LINE profile display name mirrored into `lineUsers`. Before this, the LINE
 display name always won, so the picker was a list of nicknames and emoji
 (`34_Dao ☀️`, `GODZAG`, `P`) with no way to tell which one was the person
-in the request being approved — an easy way to bind the wrong account. A
+in the request being approved — an easy way to bind the wrong account. The two names are compared
+whitespace- and Unicode-insensitive (`sameName_`: NFC, strip spaces/nbsp/
+zero-width, casefold) — the same person's name typed into the sheet and set
+as their LINE display name usually differs by a doubled space or an
+invisible character, and a plain `!==` rendered that as
+`อุดม หนานคำ (อุดม หนานคำ)`. A
 person known from only one source shows just that name; someone known from
 neither, but present in the recipients sheet, still falls back to
 `(<บทบาท>)`, and to the raw `userId` as a last resort.
