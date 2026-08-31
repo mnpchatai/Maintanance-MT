@@ -344,6 +344,17 @@ substantive changes over the old relay:
 - `ensureSheet_` repairs only *empty* header cells on an existing tab, so the
   pre-existing 3-column `LINE Users` gains the 4th header without renaming the
   columns someone already titled.
+- `backfillFollowers()` (Run button) pulls every current OA friend from LINE's
+  `/v2/bot/followers/ids` into the tab in one go, for people who chatted while
+  the relay was pointed at the dead Sheet. It reads the existing userIds into a
+  set first and writes only the ones missing, so existing rows are never
+  touched and re-running it is a no-op. LINE gates that endpoint to **verified
+  or premium** accounts (403 otherwise) and it only returns people still
+  friended — `selftest`'s `checks.followersApi` says up front whether it will
+  work. With no API available the only route is a fresh event per person: a
+  broadcast asking everyone to reply once, or a rich-menu tap (`postback` is
+  one of the handled event types). LINE OA Manager shows chat names but never
+  `userId`, so there is nothing to copy by hand.
 - `mirrorUsersToKv_()` copies the `LINE Users` tab into the `lineUsers` KV
   key on every event, so `กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา` fills itself.
   Previously nothing populated that key and admin had to paste each userId
