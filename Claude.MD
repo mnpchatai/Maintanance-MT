@@ -110,6 +110,17 @@ table shows each approved user's current binding (`LINE: <name>` /
 for (LINE Users tab + `lineUserRoles` + the `แจ้งเตือน LINE - ผู้รับ`
 mirror), plus whatever id is already bound, so an existing binding can
 never be silently dropped by the dropdown.
+`lineLabelFor` renders both names when it knows both — `ชื่อจริง
+(ชื่อไลน์)`, e.g. `ฐิติวัชร์ คงรอด (FANG :: 陳俐芳)`. The real name is
+whatever an admin typed (the name column of the `แจ้งเตือน LINE - ผู้รับ`
+tab, or the legacy `lineUserRoles[id].name`); the parenthesised one is the
+LINE profile display name mirrored into `lineUsers`. Before this, the LINE
+display name always won, so the picker was a list of nicknames and emoji
+(`34_Dao ☀️`, `GODZAG`, `P`) with no way to tell which one was the person
+in the request being approved — an easy way to bind the wrong account. A
+person known from only one source shows just that name; someone known from
+neither, but present in the recipients sheet, still falls back to
+`(<บทบาท>)`, and to the raw `userId` as a last resort.
 Only a `didHash` (sha256 of the device id) is ever stored server-side,
 never the raw id — the whole `accessRequests` list is world-readable
 through the open Apps Script endpoint, so storing raw ids would let any

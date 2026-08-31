@@ -1962,11 +1962,17 @@ function renderAccessRequests(){
   // "แจ้งเตือน LINE - ผู้รับ" ให้ admin เลือกผูกกับคำขอนี้ได้ (รวมทุกแหล่ง ไม่ซ้ำ userId เดียวกัน)
   const lineRecipientById = {};
   state.lineRecipients.forEach(r => { if(r.userId && !lineRecipientById[r.userId]) lineRecipientById[r.userId] = r; });
+  // โชว์ควบ "ชื่อจริง (ชื่อไลน์)" เมื่อรู้ทั้งสองอย่าง — ชื่อจริงมาจากที่ admin พิมพ์เอง (คอลัมน์ชื่อใน
+  // ชีตผู้รับ หรือ lineUserRoles เก่า) ส่วนชื่อไลน์คือชื่อโปรไฟล์ที่เจ้าตัวตั้งเอง (แท็บ LINE Users)
+  // เดิมชื่อไลน์ทับชื่อจริงเสมอ ทำให้ดรอปดาวน์ขึ้นเป็นชื่อเล่น/อีโมจิจนผูกผิดคนได้ง่าย
   const lineLabelFor = (id) => {
     const known = state.lineUsers.find(u => u.userId === id) || {};
     const fromSheet = lineRecipientById[id];
-    return known.displayName || (state.lineUserRoles[id] && state.lineUserRoles[id].name)
-      || (fromSheet && fromSheet.name) || id;
+    const lineName = String(known.displayName || '').trim();
+    const realName = String((fromSheet && fromSheet.name)
+      || (state.lineUserRoles[id] && state.lineUserRoles[id].name) || '').trim();
+    if(realName && lineName && realName !== lineName) return `${realName} (${lineName})`;
+    return realName || lineName || id;
   };
   const lineUserOptsFor = (cur) => {
     const ids = [...new Set(
