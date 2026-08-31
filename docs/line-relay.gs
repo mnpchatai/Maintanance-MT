@@ -26,10 +26,21 @@
 // อ่านจาก Script properties ก่อน แล้วค่อยตกมาใช้ค่าใน const (เผื่อยังไม่ได้ตั้ง properties)
 var PROPS = PropertiesService.getScriptProperties();
 
-// ใส่ id ของ Google Sheet ที่เป็นฐานข้อมูลของระบบ (ตัวเดียวกับที่แอปใช้)
-var FALLBACK_SPREADSHEET_ID = 'PUT_SPREADSHEET_ID_HERE';
-var FALLBACK_ACCESS_TOKEN   = 'PUT_LINE_CHANNEL_ACCESS_TOKEN_HERE';
-var FALLBACK_SECRET         = 'PUT_LINE_CHANNEL_SECRET_HERE';
+// id ของ Google Sheet ที่เป็นฐานข้อมูลของระบบ — ต้องตรงกับ SHEET_URL ใน index.html และกับที่
+// สคริปต์ "คำร้องแจ้งซ่อม" v8 ใช้ (ตรวจได้ที่ <API_URL>/exec?key=whoami)
+// ค่านี้ไม่ใช่ความลับ (อยู่ใน index.html ที่เปิดสาธารณะอยู่แล้ว) จึงใส่ตรงนี้ได้ เพื่อให้วางโค้ดแล้ว
+// ใช้งานได้ทันทีโดยไม่ต้องไปตั้ง Script properties ก่อน
+// เดิมค่านี้เป็น '1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k' ซึ่งเป็นชีตของบัญชีเก่า
+// (thtwgot@gmail.com) ที่ย้ายทิ้งไปแล้ว → openById() throw ทุกครั้ง = ต้นเหตุที่ userId
+// ไม่เข้าแท็บ LINE Users มาตั้งแต่ 14 ส.ค. 2026 (บั๊กเดียวกับที่สคริปต์ "คำร้องแจ้งซ่อม"
+// แก้ไปแล้วใน v8 แต่ไม่มีใครมาแก้ฝั่ง relay)
+var FALLBACK_SPREADSHEET_ID = '1Zm31RC9ak_plSb19LsgGn8QJn4EkadYOnKUF98dyAwA';
+
+// สองตัวนี้เป็นความลับจริง — ห้ามใส่ค่าจริงแล้ว commit ให้ตั้งที่ Script properties เท่านั้น
+// ไม่ตั้งก็ยังใช้ได้: userId จะเข้าแท็บ LINE Users ครบ แค่ช่อง "ชื่อที่แสดง" จะว่างไว้ก่อน
+// (เติมย้อนหลังได้ด้วยการรัน backfillDisplayNames() หลังใส่ token แล้ว)
+var FALLBACK_ACCESS_TOKEN   = '';
+var FALLBACK_SECRET         = '';
 
 function cfg_(name, fallback){
   var v = PROPS.getProperty(name);
@@ -123,8 +134,10 @@ function selfTest_(){
     r.checks.accessToken = (code === 200)
       ? { ok:true, bot: safeParse_(res.getContentText()) }
       : { ok:false, httpCode:code, body:res.getContentText().slice(0, 300),
-          fix:'LINE_CHANNEL_ACCESS_TOKEN ผิด/หมดอายุ — ออกใหม่ที่ LINE Developers Console แล้วใส่ใน Script properties' };
-    if(code !== 200) r.ok = false;
+          fix:'LINE_CHANNEL_ACCESS_TOKEN ผิด/หมดอายุ/ยังไม่ได้ตั้ง — ออกใหม่ที่ LINE Developers Console แล้วใส่ใน Script properties',
+          note:'ยังไม่ตั้งก็ไม่เป็นไร userId จะเข้าแท็บ LINE Users ครบอยู่แล้ว แค่ชื่อจะว่าง และส่งแจ้งเตือนออกไม่ได้' };
+    // จงใจไม่ตั้ง r.ok = false ตรงนี้ — token พังไม่ได้ทำให้การบันทึก userId พังอีกต่อไป
+    // ตัวที่ทำให้ ok = false ได้มีแต่ "เปิดชีตไม่ได้" ซึ่งเป็นเรื่องคอขาดบาดตายจริงๆ
   }catch(err){
     r.ok = false;
     r.checks.accessToken = { ok:false, error:String(err) };
@@ -215,6 +228,37 @@ function upsertLineUser_(userId, displayName, eventType){
   }
   sh.appendRow([userId, displayName || '', now, eventType || '']);
   return true;
+}
+
+/**
+ * เติมชื่อย้อนหลังให้แถวที่ "ชื่อที่แสดง" ยังว่าง — รันจากปุ่ม Run ในเอดิเตอร์ได้เลย
+ * (เลือกฟังก์ชัน backfillDisplayNames จากดรอปดาวน์ข้างปุ่ม Run แล้วกด Run)
+ * ใช้ตอนที่ปล่อยให้ relay เก็บ userId ไปก่อนโดยยังไม่ได้ใส่ LINE_CHANNEL_ACCESS_TOKEN
+ * ฟังก์ชันนี้ต่างจาก doPost ตรงที่เรียกจากเอดิเตอร์ ไม่ใช่จาก HTTP จึงใช้ Run ได้ปกติ
+ */
+function backfillDisplayNames(){
+  var sh = ensureSheet_(USERS_SHEET, ['userId', 'ชื่อที่แสดง', 'ทักเข้ามาล่าสุด', 'event ล่าสุด']);
+  if(!sh || sh.getLastRow() < 2){ console.log('ยังไม่มีข้อมูลในแท็บ ' + USERS_SHEET); return; }
+
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  var filled = 0, failed = 0;
+  for(var i = 0; i < rows.length; i++){
+    var id = String(rows[i][0] || '').trim();
+    if(!id || String(rows[i][1] || '').trim()) continue;  // ไม่มี id หรือมีชื่ออยู่แล้ว → ข้าม
+    try{
+      var name = fetchDisplayName_(id);
+      if(name){ sh.getRange(i + 2, 2).setValue(name); filled++; }
+      else failed++;
+    }catch(err){
+      failed++;
+      log_('backfill', 'ดึงชื่อไม่สำเร็จสำหรับ ' + id + ': ' + err);
+    }
+    Utilities.sleep(200);  // กันยิง LINE profile API ถี่เกินจนโดน rate limit
+  }
+  try{ mirrorUsersToKv_(); }catch(err){ log_('backfill', 'mirror ไม่สำเร็จ: ' + err); }
+  var msg = 'เติมชื่อสำเร็จ ' + filled + ' รายการ, ไม่สำเร็จ ' + failed + ' รายการ';
+  log_('backfill', msg);
+  console.log(msg);
 }
 
 /* ============================== KV MIRROR ============================== */
@@ -329,6 +373,19 @@ function ensureSheet_(name, header){
       sh.getRange(1, 1, 1, header.length).setFontWeight('bold');
       sh.setFrozenRows(1);
     }
+    return sh;
+  }
+  // แท็บมีอยู่แล้ว (เช่น LINE Users เดิมที่มีแค่ 3 คอลัมน์) — เติมหัวตารางเฉพาะช่องที่ "ว่าง"
+  // ไม่เขียนทับหัวที่มีข้อความอยู่แล้ว ชื่อหัวเดิมที่ผู้ใช้ตั้งเองจึงไม่ถูกเปลี่ยน
+  if(header && header.length && sh.getLastRow() >= 1){
+    try{
+      var cur = sh.getRange(1, 1, 1, header.length).getValues()[0];
+      var changed = false;
+      for(var i = 0; i < header.length; i++){
+        if(String(cur[i] || '').trim() === '' ){ cur[i] = header[i]; changed = true; }
+      }
+      if(changed) sh.getRange(1, 1, 1, header.length).setValues([cur]).setFontWeight('bold');
+    }catch(err){ /* ซ่อมหัวตารางไม่สำเร็จไม่ใช่เรื่องคอขาดบาดตาย ปล่อยผ่าน */ }
   }
   return sh;
 }
