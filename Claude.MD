@@ -77,6 +77,25 @@ writes a `pending` entry to `accessRequests` and fires
 `tryLineWebhook('admin', ...)`. They then sit on a waiting screen that
 re-checks every 7s and `location.reload()`s itself the moment an admin
 approves — no second login, no re-scan, nothing to re-enter.
+One screen, not two — คำขอสิทธิ์เข้าใช้งาน is the single place where a
+person's **app role** and the **LINE account that receives their role's
+notifications** are both set, keyed off the name they typed when they
+requested access. The separate กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา section
+(and `saveLineUserRole`/`renderLineUserRoles`) was removed for that
+reason: it listed the same people again under their LINE display names,
+with no way for the app to know which LINE account belonged to which
+requester — the app has no LINE login, identity is a device id, so the
+pairing was always a manual admin decision and now it is made once, next
+to the requester's name. What moved into the คำขอสิทธิ์ card: the manual
+"เพิ่ม LINE ด้วยตัวเอง" box (feeds `lineUsers`, so an account that never
+messaged the OA can still be picked), and a delete-only
+ผู้รับแจ้งเตือนที่กำหนดไว้แบบเดิม table listing whatever is left in the
+`lineUserRoles` KV key. That key is still read by
+`lineRecipientsForRole`, so old mappings keep working — they just can't
+be created any more, and `removeLegacyLineUserRole` exists so an admin
+can retire one instead of it being an invisible recipient. Recipients who
+never use the app at all (a manager who only wants pings, a technician
+with no app access) belong in the `แจ้งเตือน LINE - ผู้รับ` sheet tab.
 `admin` approves/rejects in ตั้งค่าข้อมูลหลัก → คำขอสิทธิ์เข้าใช้งาน,
 choosing the role to grant (which can differ from the one requested)
 and, optionally, the LINE account to bind to that person (`lineUserId`
@@ -278,8 +297,9 @@ route that to the right person, add a row per technician to
 `แจ้งเตือน LINE - ผู้รับ` with บทบาท = their exact name string and
 userId = their LINE userId — same mechanism as the other roles, no
 Apps Script changes needed. Until a technician has a row there (or a
-`lineUserRoles` mapping with that name as `techName`), their assignment
-ping simply isn't sent — see the no-broadcast-fallback note above.
+`techName` on their approved คำขอสิทธิ์ row with a LINE bound, or a
+leftover `lineUserRoles` mapping with that name as `techName`), their
+assignment ping simply isn't sent — see the no-broadcast-fallback note above.
 (This per-name routing is separate from the `tech` app role below —
 `tech` is the role a technician's own LINE account holds to log into
 the app; the per-name row is what makes the assignment ping personal.)
@@ -297,13 +317,10 @@ use and marks the table as a fallback while the constant is set. To go back
 to configuring the relay from Settings, set `LINE_RELAY_URL` to `''`.
 `tryLineWebhook` now also posts a `userIds` array alongside
 `role`/`message`, resolved client-side by `lineRecipientsForRole` as the
-union (deduped) of three sources: the `lineUserRoles` KV map that `admin`
-fills in via ตั้งค่าข้อมูลหลัก → กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา
-(that screen lists the `lineUsers` KV entries and lets admin attach a
-role — and for `tech`, a technician name — to each LINE userId), the
-LINE account bound to each approved row in `accessRequests` (set at
-approval or later via แก้ไขบทบาท), and the `lineRecipients` mirror of the
-hand-typed `แจ้งเตือน LINE - ผู้รับ` tab. The sheet mirror has to be in
+union (deduped) of three sources: the LINE account bound to each approved
+row in `accessRequests` (set at approval or later via แก้ไขบทบาท — the
+primary way), the `lineUserRoles` KV map (legacy, see below), and the
+`lineRecipients` mirror of the hand-typed `แจ้งเตือน LINE - ผู้รับ` tab. The sheet mirror has to be in
 that union: the relay skips its own sheet lookup entirely as soon as the
 client sends a non-empty `userIds`, so leaving it out would silently drop
 recipients who only have a sheet row.
@@ -382,10 +399,11 @@ substantive changes over the old relay:
   one of the handled event types). LINE OA Manager shows chat names but never
   `userId`, so there is nothing to copy by hand.
 - `mirrorUsersToKv_()` copies the `LINE Users` tab into the `lineUsers` KV
-  key on every event, so `กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา` fills itself.
-  Previously nothing populated that key and admin had to paste each userId
-  in by hand; the manual add box is kept for users with no `source.userId`
-  (someone messaging from a group without having friended the OA).
+  key on every event, so the LINE picker in คำขอสิทธิ์เข้าใช้งาน fills
+  itself. Previously nothing populated that key and admin had to paste each
+  userId in by hand; the manual add box is kept for users with no
+  `source.userId` (someone messaging from a group without having friended
+  the OA).
 Git workflow used throughout this project
 Every change so far: branch off `main` → edit `index.html` → commit → push →
 `mcp__github__create_pull_request` → `mcp__github__merge_pull_request`
@@ -432,8 +450,9 @@ LINE integration is mid-setup: OA created, Messaging API enabled, both
 Apps Script projects built and deployed, CORS bug fixed. Still open:
 finish wiring the LINE Developers Console Webhook URL field, have each
 real recipient message the OA once to get logged into `LINE Users`, then
-fill in the `แจ้งเตือน LINE - ผู้รับ` tab (or the in-app กำหนดบทบาท
-ผู้ใช้ LINE ที่ทักเข้ามา screen) mapping each role to a real `userId`.
+bind each approved user to their LINE account in คำขอสิทธิ์เข้าใช้งาน
+(or, for people who never use the app, fill in the
+`แจ้งเตือน LINE - ผู้รับ` tab) so every role maps to a real `userId`.
 The relay's broadcast-to-everyone fallback was removed (see the "LineOA
 MT" section above) — until that mapping exists per role, notifications
 for that role simply aren't sent, rather than reaching unrelated people.
