@@ -78,8 +78,19 @@ writes a `pending` entry to `accessRequests` and fires
 re-checks every 7s and `location.reload()`s itself the moment an admin
 approves — no second login, no re-scan, nothing to re-enter.
 `admin` approves/rejects in ตั้งค่าข้อมูลหลัก → คำขอสิทธิ์เข้าใช้งาน,
-choosing the role to grant (which can differ from the one requested).
-A count badge sits on the settings tab while requests are pending.
+choosing the role to grant (which can differ from the one requested)
+and, optionally, the LINE account to bind to that person (`lineUserId`
+on the request row). A count badge sits on the settings tab while
+requests are pending. An already-approved row can be reopened with
+แก้ไขบทบาท, which edits the granted roles, the technician name and the
+bound LINE account (`saveAccessRoles`) — that binding is not cosmetic:
+`lineRecipientsForRole` treats it as a real recipient, so changing it
+changes where that person's role notifications land. The decided-users
+table shows each approved user's current binding (`LINE: <name>` /
+`ยังไม่ผูก`), and the picker lists everyone the app knows a LINE userId
+for (LINE Users tab + `lineUserRoles` + the `แจ้งเตือน LINE - ผู้รับ`
+mirror), plus whatever id is already bound, so an existing binding can
+never be silently dropped by the dropdown.
 Only a `didHash` (sha256 of the device id) is ever stored server-side,
 never the raw id — the whole `accessRequests` list is world-readable
 through the open Apps Script endpoint, so storing raw ids would let any
@@ -285,11 +296,26 @@ posting there fails silently. The Settings page shows the URL actually in
 use and marks the table as a fallback while the constant is set. To go back
 to configuring the relay from Settings, set `LINE_RELAY_URL` to `''`.
 `tryLineWebhook` now also posts a `userIds` array alongside
-`role`/`message`, resolved client-side from the `lineUserRoles` KV map
-that `admin` fills in via ตั้งค่าข้อมูลหลัก → กำหนดบทบาทผู้ใช้ LINE
-ที่ทักเข้ามา (that screen lists the `lineUsers` KV entries and lets
-admin attach a role — and for `tech`, a technician name — to each LINE
-userId, replacing hand-editing the `แจ้งเตือน LINE - ผู้รับ` tab).
+`role`/`message`, resolved client-side by `lineRecipientsForRole` as the
+union (deduped) of three sources: the `lineUserRoles` KV map that `admin`
+fills in via ตั้งค่าข้อมูลหลัก → กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา
+(that screen lists the `lineUsers` KV entries and lets admin attach a
+role — and for `tech`, a technician name — to each LINE userId), the
+LINE account bound to each approved row in `accessRequests` (set at
+approval or later via แก้ไขบทบาท), and the `lineRecipients` mirror of the
+hand-typed `แจ้งเตือน LINE - ผู้รับ` tab. The sheet mirror has to be in
+that union: the relay skips its own sheet lookup entirely as soon as the
+client sends a non-empty `userIds`, so leaving it out would silently drop
+recipients who only have a sheet row.
+Because any role can be the one that fires a notification, the two
+routing keys (`lineUserRoles`, `lineRecipients`) are loaded once per
+session for everyone by `loadNotifyRouting()` (called from
+`loadBackground`), not only for admins opening Settings. They stay out of
+the 3s poll for non-admins — that data barely changes — so this costs two
+requests at startup and nothing after. Before this, a non-admin's
+notifications always shipped an empty `userIds` and fell through to the
+relay's sheet lookup, so in-app mappings were effectively ignored unless
+an admin happened to be the sender.
 The relay script now honors `userIds`: `handleNotifyRequest_` pushes
 to `body.userIds` when it's a non-empty array, skipping the sheet lookup
 entirely; only falls back to the `แจ้งเตือน LINE - ผู้รับ` sheet lookup
