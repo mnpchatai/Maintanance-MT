@@ -342,8 +342,8 @@ let state = {
   ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null,
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
-    editingAccessId:null, editRole:{}, editTechName:{},
-    lineRole:{}, lineTechName:{}, lineName:{}, newLineUserId:'', newLineUserName:'' },
+    editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
+    newLineUserId:'', newLineUserName:'' },
 };
 
 /* ============================= STORAGE HELPERS (Google Sheets via Apps Script) ============================= */
@@ -771,6 +771,7 @@ function startEditAccessRoles(id){
   state.ui.editingAccessId = id;
   state.ui.editRole[id] = (req.roles || []).slice();
   state.ui.editTechName[id] = req.techName || '';
+  state.ui.editLineUserId[id] = req.lineUserId || '';
   render();
 }
 function cancelEditAccessRoles(){ state.ui.editingAccessId = null; render(); }
@@ -786,10 +787,13 @@ async function saveAccessRoles(id){
   if(!roles.length || !roles.every(r => ROLES[r])){ toast('กรุณาเลือกบทบาทอย่างน้อย 1 บทบาท', true); return; }
   const techName = roles.includes('tech') ? (state.ui.editTechName[id] || '') : '';
   if(roles.includes('tech') && !techName){ toast('กรุณาเลือกชื่อช่างให้ตรงกับรายชื่อในชีต "ช่าง"', true); return; }
+  // LINE userId ที่ผูกไว้กับคนนี้ = ปลายทางที่การแจ้งเตือนของบทบาทข้างบนจะถูกส่งไปหา
+  // (ดู lineRecipientsForRole ซึ่งรวมผู้ใช้ที่อนุมัติแล้วเข้ากับตาราง lineUserRoles)
+  const lineUserId = (state.ui.editLineUserId[id] !== undefined ? state.ui.editLineUserId[id] : (req.lineUserId || '')).trim();
   const ok = await saveAccessRequests(list => {
     const t = list.find(r => r.id === id);
     if(!t) return null;
-    t.roles = roles; t.techName = techName;
+    t.roles = roles; t.techName = techName; t.lineUserId = lineUserId;
     return list;
   });
   if(!ok){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
@@ -873,6 +877,19 @@ async function loadBackground(){
   state.notifications = notifs || [];
   state.ordersLoaded = true;
   render();
+  loadNotifyRouting();   // ไม่ต้องรอ: ใช้ตอนกดปุ่มที่ยิงแจ้งเตือนเท่านั้น ไม่มีผลกับหน้าจอ
+}
+/* ผู้รับแจ้งเตือน LINE (lineUserRoles + lineRecipients) — คนที่กดปุ่มในใบแจ้งซ่อมเป็นคนยิงแจ้งเตือนเอง
+   ไม่ใช่แค่ admin เครื่องของทุกคนจึงต้องรู้ว่าบทบาทไหนส่งถึง LINE ไหน (ดู lineRecipientsForRole)
+   โหลดครั้งเดียวตอนเปิดแอปเท่านั้น ไม่ได้อยู่ในรอบ poll ทุก 3 วิ — ข้อมูลชุดนี้แทบไม่เปลี่ยนระหว่างวัน */
+async function loadNotifyRouting(){
+  if(state.lineDataLoaded) return;
+  const [lineUserRoles, lineRecipients] = await Promise.all([
+    storeGet('lineUserRoles'), storeGet('lineRecipients')
+  ]);
+  if(state.lineDataLoaded) return;   // หน้าตั้งค่าโหลดชุดเต็มแซงไปแล้วระหว่างรอ อย่าเขียนทับของใหม่ด้วยของเก่า
+  if(lineUserRoles && typeof lineUserRoles === 'object') state.lineUserRoles = lineUserRoles;
+  if(Array.isArray(lineRecipients)) state.lineRecipients = lineRecipients;
 }
 /* ข้อมูลเฉพาะหน้า "ตั้งค่าข้อมูลหลัก" ของ admin — คนอื่นไม่เคยต้องใช้เลย จึงโหลดแบบขี้เกียจ (lazy)
    แค่ตอน admin เข้าหน้านี้จริงๆ (เรียกจาก setView) ไม่ต้องรวมอยู่ใน initial load ของทุกคน */
@@ -928,10 +945,21 @@ function toast(msg, isErr){
    รองรับทั้งบทบาทของระบบ (fm/gm/maint/tech/requester/admin) และ "ชื่อช่าง" ที่ใช้ยิงปิงส่วนตัว */
 function lineRecipientsForRole(role){
   const map = state.lineUserRoles || {};
-  return Object.keys(map).filter(userId => {
-    const m = map[userId] || {};
-    return (m.roles || []).includes(role) || (m.techName && m.techName === role);
+  const matches = m => ((m.roles || []).includes(role) || (m.techName && m.techName === role));
+  const ids = Object.keys(map).filter(userId => matches(map[userId] || {}));
+  // ...รวมกับผู้ใช้ที่อนุมัติสิทธิ์แล้วและ admin ผูก LINE ไว้ให้ตอนอนุมัติ/แก้ไขบทบาท
+  // (นี่คือทางหลักตั้งแต่ยุบหัวข้อ "กำหนดบทบาทผู้ใช้ LINE" มารวมกับคำขอสิทธิ์ที่เดียว)
+  (state.accessRequests || []).forEach(r => {
+    if(r.status !== 'approved' || !r.lineUserId) return;
+    if(matches(r) && !ids.includes(r.lineUserId)) ids.push(r.lineUserId);
   });
+  // ...และแถวที่พิมพ์เองในชีต "แจ้งเตือน LINE - ผู้รับ" ด้วย: relay จะข้ามการอ่านชีตทันทีที่เราส่ง
+  // userIds มาให้ ถ้าไม่รวมแถวพวกนี้เข้ามาเอง คนที่มีแต่แถวในชีตจะหายไปจากผู้รับ
+  (state.lineRecipients || []).forEach(r => {
+    if(!r.userId || String(r.role || '').trim() !== String(role || '').trim()) return;
+    if(!ids.includes(r.userId)) ids.push(r.userId);
+  });
+  return ids;
 }
 /* URL ปลายทางของ relay LINE: ใช้ค่าคงที่ LINE_RELAY_URL ก่อน แล้วจึงค่อยตกไปใช้ค่าที่ตั้งไว้ในชีต
    (จำเป็นตอนย้ายบัญชี — ค่าในชีตยังเป็น URL ของสคริปต์บัญชีเก่าซึ่งยิงไปก็ไม่มีอะไรเกิดขึ้น) */
@@ -1934,18 +1962,23 @@ function renderAccessRequests(){
   // "แจ้งเตือน LINE - ผู้รับ" ให้ admin เลือกผูกกับคำขอนี้ได้ (รวมทุกแหล่ง ไม่ซ้ำ userId เดียวกัน)
   const lineRecipientById = {};
   state.lineRecipients.forEach(r => { if(r.userId && !lineRecipientById[r.userId]) lineRecipientById[r.userId] = r; });
+  const lineLabelFor = (id) => {
+    const known = state.lineUsers.find(u => u.userId === id) || {};
+    const fromSheet = lineRecipientById[id];
+    return known.displayName || (state.lineUserRoles[id] && state.lineUserRoles[id].name)
+      || (fromSheet && fromSheet.name) || id;
+  };
   const lineUserOptsFor = (cur) => {
     const ids = [...new Set(
       state.lineUsers.map(u => u.userId)
         .concat(Object.keys(state.lineUserRoles))
         .concat(Object.keys(lineRecipientById))
+        .concat(cur ? [cur] : [])   // ค่าที่ผูกไว้เดิมต้องไม่หายจากรายการ แม้คนนั้นจะหลุดจากทุกแหล่ง
     )];
     return ids.map(id => {
-      const known = state.lineUsers.find(u => u.userId === id) || {};
       const fromSheet = lineRecipientById[id];
-      const label = known.displayName || (state.lineUserRoles[id] && state.lineUserRoles[id].name)
-        || (fromSheet && fromSheet.name) || (fromSheet ? `(${fromSheet.role})` : id);
-      return `<option value="${escapeHtml(id)}" ${cur === id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+      const label = lineLabelFor(id);
+      return `<option value="${escapeHtml(id)}" ${cur === id ? 'selected' : ''}>${escapeHtml(label === id && fromSheet ? `(${fromSheet.role})` : label)}</option>`;
     }).join('');
   };
 
@@ -1986,7 +2019,7 @@ function renderAccessRequests(){
         </select>
       </div>` : ''}
       <div style="margin-top:10px;">
-        <label class="field-label">LINE ของคนนี้ (ถ้ามี) — จะส่งแจ้งเตือนไปหาโดยตรงตอนอนุมัติ</label>
+        <label class="field-label">LINE ของคนนี้ (ถ้ามี) — แจ้งเตือนตอนอนุมัติ และการแจ้งเตือนของบทบาทที่ให้ไว้</label>
         <select class="input" onchange="state.ui.grantLineUserId['${r.id}']=this.value">
           <option value="">— ไม่ทราบ/ไม่เชื่อม —</option>
           ${lineUserOptsFor(lineUserId)}
@@ -2007,6 +2040,7 @@ function renderAccessRequests(){
     if(r.status === 'approved' && state.ui.editingAccessId === r.id){
       const roles = state.ui.editRole[r.id] || [];
       const techName = state.ui.editTechName[r.id] || '';
+      const lineUserId = state.ui.editLineUserId[r.id] !== undefined ? state.ui.editLineUserId[r.id] : (r.lineUserId || '');
       const roleChecks = Object.keys(ROLES).map(k => `
           <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:normal;">
             <input type="checkbox" value="${k}" ${roles.includes(k) ? 'checked' : ''}
@@ -2025,6 +2059,14 @@ function renderAccessRequests(){
               ${techOptsFor(techName)}
             </select>
           </div>` : ''}
+          <div style="margin-top:8px;">
+            <label class="field-label">LINE ที่รับการแจ้งเตือนของบทบาทนี้</label>
+            <select class="input" onchange="state.ui.editLineUserId['${r.id}']=this.value">
+              <option value="">— ไม่ส่งแจ้งเตือนทาง LINE —</option>
+              ${lineUserOptsFor(lineUserId)}
+            </select>
+            <p class="desc" style="margin:4px 0 0; font-size:12px;">ไม่พบชื่อในรายการ? ให้คนนั้นทักแชทหา LINE OA หนึ่งครั้ง หรือเพิ่ม userId เองที่หัวข้อ "เพิ่มผู้ใช้ LINE ด้วยตัวเอง" ด้านล่าง</p>
+          </div>
           <div class="order-actions" style="margin-top:10px;">
             <button class="btn btn-success btn-sm" onclick="saveAccessRoles('${r.id}')">บันทึก</button>
             <button class="btn btn-outline btn-sm" onclick="cancelEditAccessRoles()">ยกเลิก</button>
@@ -2035,7 +2077,7 @@ function renderAccessRequests(){
     return `<tr>
       <td>${escapeHtml(r.name)}${r.techName ? `<div style="font-size:11.5px; color:var(--slate);">${escapeHtml(r.techName)}</div>` : ''}${r.device ? `<div style="font-size:11px; color:var(--slate-light);">${escapeHtml(r.device)}</div>` : ''}</td>
       <td>${escapeHtml(r.dept || '-')}</td>
-      <td>${pill}${granted ? ` <span style="font-size:12px;">${escapeHtml(granted)}</span>` : ''}</td>
+      <td>${pill}${granted ? ` <span style="font-size:12px;">${escapeHtml(granted)}</span>` : ''}${r.status === 'approved' ? `<div style="font-size:11.5px; color:var(--slate);">LINE: ${r.lineUserId ? escapeHtml(lineLabelFor(r.lineUserId)) : 'ยังไม่ผูก'}</div>` : ''}</td>
       <td>
         ${r.status === 'approved' ? `<button class="del" onclick="startEditAccessRoles('${r.id}')">แก้ไขบทบาท</button> ` : ''}
         <button class="del" onclick="revokeAccessRequest('${r.id}')">ถอนสิทธิ์/ลบ</button>
@@ -2043,10 +2085,24 @@ function renderAccessRequests(){
     </tr>`;
   }).join('');
 
+  // ผู้รับที่เคยกำหนดไว้ใน KV 'lineUserRoles' สมัยที่ยังมีหัวข้อ "กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา"
+  // แยกต่างหาก — ตอนนี้ยุบมาผูกที่คำขอสิทธิ์ด้านบนที่เดียวแล้ว แต่ของเดิมยังส่งแจ้งเตือนอยู่จริง
+  // (ดู lineRecipientsForRole) จึงต้องโชว์และลบได้ ไม่งั้นจะกลายเป็นผู้รับผีที่ admin มองไม่เห็น
+  const legacyRows = Object.keys(state.lineUserRoles).map(id => {
+    const m = state.lineUserRoles[id] || {};
+    const what = [...(m.roles || []).map(k => ROLES[k] ? ROLES[k].label : k), ...(m.techName ? [`ช่าง: ${m.techName}`] : [])].join(', ');
+    return `<tr>
+      <td>${escapeHtml(m.name || lineLabelFor(id))}<div class="mono" style="font-size:10.5px; color:var(--slate-light); word-break:break-all;">${escapeHtml(id)}</div></td>
+      <td style="font-size:12.5px;">${escapeHtml(what || '-')}</td>
+      <td><button class="del" onclick="removeLegacyLineUserRole('${escapeHtml(id)}')">ลบ</button></td>
+    </tr>`;
+  }).join('');
+
   return `
   <div class="settings-section card">
     <h3>คำขอสิทธิ์เข้าใช้งาน ${pending.length ? `<span class="status-pill" style="color:var(--navy); background:var(--amber);">${pending.length} รายการใหม่</span>` : ''}</h3>
     <p class="desc">ผู้ใช้ที่ยังไม่มีสิทธิ์จะเห็นหน้า "ขอสิทธิ์เข้าใช้งาน" เมื่อเปิดลิงก์แอป เมื่อส่งคำขอเข้ามา ระบบจะแจ้งเตือนไปที่ LINE ของผู้ดูแล — กดอนุมัติที่นี่แล้วผู้ขอจะเข้าใช้งานได้เองภายในไม่กี่วินาที</p>
+    <p class="desc">จัดการที่เดียวจบ: <b>บทบาท</b> (สิทธิ์เข้าใช้งานแอป) และ <b>LINE ที่รับการแจ้งเตือน</b> ของคนนั้น ตั้งได้จากรายชื่อผู้ขอในหน้านี้ — ทั้งตอนอนุมัติ และแก้ทีหลังด้วยปุ่ม "แก้ไขบทบาท"</p>
     ${pending.length ? pendingCards : `<p class="desc" style="margin:0;">ไม่มีคำขอที่รออนุมัติ</p>`}
     ${decided.length ? `
     <h3 style="margin-top:20px;">ผู้ใช้ที่พิจารณาแล้ว</h3>
@@ -2055,104 +2111,15 @@ function renderAccessRequests(){
       ${decidedRows}
     </table>
     <p class="desc" style="margin:10px 0 0; font-size:12px;">หมายเหตุ: ผู้ใช้ที่ผู้ดูแลพิมพ์แถวไว้ในชีต <b>สิทธิ์ผู้ใช้ LINE</b> เองจะไม่แสดงในตารางนี้ — จัดการได้ที่ชีตโดยตรง</p>` : ''}
-  </div>
-  `;
-}
-
-/* ============================= ADMIN: กำหนดบทบาทให้ผู้ใช้ LINE ============================= */
-async function saveLineUserRole(userId){
-  const id = String(userId || '').trim();
-  if(!id){ toast('ไม่พบ LINE userId', true); return; }
-  const cur = state.lineUserRoles[id] || {};
-  const role = state.ui.lineRole[id] !== undefined ? state.ui.lineRole[id] : ((cur.roles || [])[0] || '');
-  const techName = state.ui.lineTechName[id] !== undefined ? state.ui.lineTechName[id] : (cur.techName || '');
-  if(role && !ROLES[role]){ toast('บทบาทไม่ถูกต้อง', true); return; }
-  if(role === 'tech' && !techName){ toast('กรุณาเลือกชื่อช่างให้ตรงกับชีต "ช่าง"', true); return; }
-  const known = state.lineUsers.find(u => u.userId === id);
-  const next = Object.assign({}, state.lineUserRoles);
-  if(!role){
-    delete next[id];   // ไม่เลือกบทบาท = ยกเลิกการกำหนด
-  } else {
-    next[id] = {
-      name: (state.ui.lineName[id] || cur.name || (known && known.displayName) || '').trim(),
-      roles: [role],
-      techName: role === 'tech' ? techName : '',
-    };
-  }
-  if(!await storeSet('lineUserRoles', next)){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
-  state.lineUserRoles = next;
-  toast(role ? `กำหนด "${ROLES[role].label}" แล้ว` : 'ยกเลิกการกำหนดบทบาทแล้ว');
-  render();
-}
-async function addLineUserManually(){
-  const id = (state.ui.newLineUserId || '').trim();
-  const name = (state.ui.newLineUserName || '').trim();
-  if(!id){ toast('กรุณากรอก LINE userId', true); return; }
-  if(state.lineUsers.some(u => u.userId === id)){ toast('มีผู้ใช้รายนี้ในรายการอยู่แล้ว', true); return; }
-  const next = state.lineUsers.concat([{ userId:id, displayName:name || '(เพิ่มด้วยตัวเอง)', lastSeen:nowIso() }]);
-  if(!await storeSet('lineUsers', next)){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
-  state.lineUsers = next;
-  state.ui.newLineUserId = ''; state.ui.newLineUserName = '';
-  toast('เพิ่มผู้ใช้ LINE แล้ว — เลือกบทบาทให้เขาได้เลย');
-  render();
-}
-function setLineRole(userId, v){ state.ui.lineRole[userId] = v; render(); }
-function renderLineUserRoles(){
-  // รวมคนที่ทักเข้ามา (แท็บ LINE Users) กับคนที่ถูกกำหนดบทบาทไว้แล้ว เผื่อบางรายไม่อยู่ในรายการที่ทักเข้ามา
-  const ids = [...new Set(state.lineUsers.map(u => u.userId).concat(Object.keys(state.lineUserRoles)))];
-  const techOptsFor = (cur) => (state.config.technicians || []).map(t =>
-    `<option value="${escapeHtml(t)}" ${cur === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
-
-  const rows = ids.map(id => {
-    const known = state.lineUsers.find(u => u.userId === id) || {};
-    const cur = state.lineUserRoles[id] || {};
-    const role = state.ui.lineRole[id] !== undefined ? state.ui.lineRole[id] : ((cur.roles || [])[0] || '');
-    const techName = state.ui.lineTechName[id] !== undefined ? state.ui.lineTechName[id] : (cur.techName || '');
-    const roleOpts = Object.keys(ROLES).map(k =>
-      `<option value="${k}" ${role === k ? 'selected' : ''}>${ROLES[k].label}</option>`).join('');
-    const assigned = (cur.roles || [])[0];
-    return `
-    <div class="reject-box">
-      <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline;">
-        <b style="color:var(--navy); font-size:14.5px;">${escapeHtml(known.displayName || cur.name || '(ไม่ทราบชื่อ)')}</b>
-        ${assigned
-          ? `<span class="status-pill" style="color:#2F8F6B; background:#e6f3ee;">${escapeHtml(ROLES[assigned] ? ROLES[assigned].label : assigned)}${cur.techName ? ' — ' + escapeHtml(cur.techName) : ''}</span>`
-          : `<span class="status-pill" style="color:#6b7785; background:#eef0f2;">ยังไม่กำหนดบทบาท</span>`}
-      </div>
-      <div class="mono" style="font-size:11px; color:var(--slate); margin-top:3px; word-break:break-all;">${escapeHtml(id)}</div>
-      ${known.lastSeen ? `<div style="font-size:12px; color:var(--slate);">ทักเข้ามาล่าสุด: ${escapeHtml(String(known.lastSeen))}</div>` : ''}
-      <div style="margin-top:10px;">
-        <label class="field-label">ชื่อที่ใช้แสดงในระบบ</label>
-        <input class="input" data-fid="lineName-${escapeHtml(id)}" value="${escapeHtml(state.ui.lineName[id] !== undefined ? state.ui.lineName[id] : (cur.name || known.displayName || ''))}" oninput="state.ui.lineName['${escapeHtml(id)}']=this.value" placeholder="ชื่อ-นามสกุล">
-      </div>
-      <div style="margin-top:10px;">
-        <label class="field-label">บทบาท</label>
-        <select class="input" onchange="setLineRole('${escapeHtml(id)}', this.value)">
-          <option value="" ${role === '' ? 'selected' : ''}>— ไม่กำหนด —</option>
-          ${roleOpts}
-        </select>
-      </div>
-      ${role === 'tech' ? `
-      <div style="margin-top:10px;">
-        <label class="field-label">ชื่อช่าง (ต้องตรงกับชีต "ช่าง") <span class="req-star">*</span></label>
-        <select class="input" onchange="state.ui.lineTechName['${escapeHtml(id)}']=this.value">
-          <option value="">— กรุณาเลือก —</option>
-          ${techOptsFor(techName)}
-        </select>
-      </div>` : ''}
-      <div class="order-actions" style="margin-top:12px;">
-        <button class="btn btn-success btn-sm" onclick="saveLineUserRole('${escapeHtml(id)}')">บันทึกบทบาท</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  return `
-  <div class="settings-section card">
-    <h3>กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา</h3>
-    <p class="desc">กำหนดว่าผู้ใช้ LINE แต่ละคนเป็นบทบาทไหน เพื่อให้ <b>การแจ้งเตือนทาง LINE</b> ของบทบาทนั้นส่งตรงถึงคนที่ถูกต้อง (แทนการกระจายให้เพื่อนทุกคนใน OA) — ส่วนสิทธิ์ <b>เข้าใช้งานแอป</b> อนุมัติที่หัวข้อ "คำขอสิทธิ์เข้าใช้งาน" ด้านบน</p>
-    ${ids.length ? rows : `<p class="desc" style="margin:0;">ยังไม่มีผู้ใช้ LINE ในรายการ — ให้แต่ละคนทักแชทหา LINE OA หนึ่งครั้ง แล้วนำ userId จากแท็บ <b>LINE Users</b> ในชีตมาเพิ่มด้านล่าง</p>`}
-    <h3 style="margin-top:20px;">เพิ่มผู้ใช้ LINE ด้วยตัวเอง</h3>
-    <p class="desc">คัดลอก userId จากแท็บ <b>LINE Users</b> ในชีต (คนที่ทักแชทหา OA แล้วจะถูกบันทึกไว้ที่นั่นอัตโนมัติ)</p>
+    ${legacyRows ? `
+    <h3 style="margin-top:20px;">ผู้รับแจ้งเตือนที่กำหนดไว้แบบเดิม</h3>
+    <p class="desc">รายการที่เคยกำหนดไว้ในหัวข้อ "กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา" (ยุบมารวมที่นี่แล้ว) — <b>ยังส่งแจ้งเตือนอยู่จริง</b> ถ้าซ้ำกับคนที่ผูก LINE ไว้ด้านบนแล้ว หรือไม่ต้องการแล้ว ให้กดลบได้เลย</p>
+    <table class="mini">
+      <tr><th>ชื่อ</th><th>ส่งแจ้งเตือนของ</th><th></th></tr>
+      ${legacyRows}
+    </table>` : ''}
+    <h3 style="margin-top:20px;">เพิ่ม LINE ด้วยตัวเอง</h3>
+    <p class="desc">ใช้เมื่อคนที่ต้องการผูกยังไม่ขึ้นในช่อง "LINE ของคนนี้" ด้านบน — คัดลอก userId จากแท็บ <b>LINE Users</b> ในชีต (คนที่ทักแชทหา LINE OA แล้วจะถูกบันทึกไว้ที่นั่นอัตโนมัติ) เพิ่มที่นี่แล้วชื่อจะไปโผล่ในช่องเลือกให้ผูกได้ทันที</p>
     <div class="inline-form">
       <input class="input mono" data-fid="newLineUserId" style="font-size:12px;" value="${escapeHtml(state.ui.newLineUserId)}" oninput="state.ui.newLineUserId=this.value" placeholder="U1234567890abcdef...">
       <input class="input" data-fid="newLineUserName" value="${escapeHtml(state.ui.newLineUserName)}" oninput="state.ui.newLineUserName=this.value" placeholder="ชื่อ-นามสกุล">
@@ -2162,8 +2129,38 @@ function renderLineUserRoles(){
       <div class="txt">เปิดแท็บ <b>LINE Users</b> เพื่อดู userId ของคนที่ทักเข้ามา</div>
       <a href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
     </div>
+    <p class="desc" style="margin:10px 0 0; font-size:12px;">คนที่ <b>รับแจ้งเตือนอย่างเดียว ไม่ได้ใช้แอป</b> (เช่น หัวหน้าที่ไม่เคยเปิดลิงก์) และ <b>ช่างที่ไม่ได้ใช้แอป</b> ยังผูกได้ที่แท็บ <b>แจ้งเตือน LINE - ผู้รับ</b> ในชีต (คอลัมน์ บทบาท = ชื่อบทบาทหรือชื่อช่างเป๊ะๆ, userId) ระบบรวมแถวพวกนั้นเป็นผู้รับด้วยเสมอ</p>
   </div>
   `;
+}
+
+/* ============================= ADMIN: LINE ที่ใช้รับแจ้งเตือน ============================= */
+/* เพิ่ม userId เองสำหรับคนที่ยังไม่โผล่ในแท็บ LINE Users (ยังไม่เคยทักหา OA) — เพิ่มแล้วจะไปขึ้น
+   ในช่อง "LINE ของคนนี้" ของรายการคำขอสิทธิ์ ให้ผูกกับชื่อผู้ขอได้เลย */
+async function addLineUserManually(){
+  const id = (state.ui.newLineUserId || '').trim();
+  const name = (state.ui.newLineUserName || '').trim();
+  if(!id){ toast('กรุณากรอก LINE userId', true); return; }
+  if(state.lineUsers.some(u => u.userId === id)){ toast('มีผู้ใช้รายนี้ในรายการอยู่แล้ว', true); return; }
+  const next = state.lineUsers.concat([{ userId:id, displayName:name || '(เพิ่มด้วยตัวเอง)', lastSeen:nowIso() }]);
+  if(!await storeSet('lineUsers', next)){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  state.lineUsers = next;
+  state.ui.newLineUserId = ''; state.ui.newLineUserName = '';
+  toast('เพิ่ม LINE แล้ว — เลือกผูกกับผู้ใช้ในรายการคำขอสิทธิ์ได้เลย');
+  render();
+}
+/* ลบผู้รับที่ตั้งไว้สมัยยังมีหัวข้อ "กำหนดบทบาทผู้ใช้ LINE" แยกต่างหาก (KV: lineUserRoles)
+   ตอนนี้เหลือทางเดียวคือผูก LINE กับคำขอสิทธิ์ด้านบน ที่นี่จึงมีแค่ปุ่มลบของเก่า ไม่มีปุ่มเพิ่ม */
+async function removeLegacyLineUserRole(userId){
+  const cur = state.lineUserRoles[userId];
+  if(!cur) return;
+  if(!confirm(`ลบ "${cur.name || userId}" ออกจากผู้รับแจ้งเตือน ?\n\nคนนี้จะไม่ได้รับแจ้งเตือนทาง LINE อีก จนกว่าจะถูกผูกไว้กับผู้ใช้ในรายการคำขอสิทธิ์`)) return;
+  const next = Object.assign({}, state.lineUserRoles);
+  delete next[userId];
+  if(!await storeSet('lineUserRoles', next)){ toast('ลบไม่สำเร็จ กรุณาลองใหม่', true); return; }
+  state.lineUserRoles = next;
+  toast('ลบผู้รับแจ้งเตือนแล้ว');
+  render();
 }
 
 function renderSettings(){
@@ -2185,8 +2182,6 @@ function renderSettings(){
   ${!state.lineDataLoaded ? `<p class="desc">⏳ กำลังโหลดข้อมูลผู้ใช้ LINE...</p>` : ''}
 
   ${renderAccessRequests()}
-
-  ${renderLineUserRoles()}
 
   <div class="settings-section card">
     <h3>แผนก · เครื่องจักร · ช่าง</h3>
