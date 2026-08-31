@@ -297,11 +297,27 @@ when the client sent no `userIds`, and no longer broadcasts to every OA
 friend if neither source has a recipient (see the note above). This was
 a hand-edit made directly in the Apps Script editor, since that code
 isn't in this repo.
+**Root cause found (31 Aug 2026): the relay's `SPREADSHEET_ID` was still
+`1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k`** — the old
+`thtwgot@gmail.com` account's Sheet — while the database moved to
+`1Zm31RC9ak...` in the 26 Aug migration. The relay runs as the new account,
+so `openById()` threw on every event. This is the *same* bug the
+"คำร้องแจ้งซ่อม" script found and fixed in its `v8` (its own comment names
+`1er3WPCH...` and `thtwgot@gmail.com`); nobody carried the fix across to the
+relay. It matches the evidence exactly: the `LINE Users` tab holds data up to
+14 Aug 2026 and nothing after. The `whoami` endpoint on the main script and
+`selftest` on the relay both report the Sheet id they actually opened — those
+two must always agree.
+
 The relay source now lives in this repo as `docs/line-relay.gs` — a
-credential-free template meant to be pasted over `Code.gs` in the "LineOA
-MT" editor (it reads `SPREADSHEET_ID`, `LINE_CHANNEL_ACCESS_TOKEN` and
-`LINE_CHANNEL_SECRET` from Apps Script **Script properties**, so no secret
-ever enters git; the live values still only exist in that project). It
+credential-free file meant to be pasted over `Code.gs` in the "LineOA MT"
+editor. `SPREADSHEET_ID` is hardcoded to the correct id (it is not a secret —
+`index.html` already publishes it) so a paste-and-deploy is enough to start
+logging userIds with no further setup; only `LINE_CHANNEL_ACCESS_TOKEN` and
+`LINE_CHANNEL_SECRET` come from Apps Script **Script properties**, and both
+are optional for logging — without them userIds still land in `LINE Users`,
+just with a blank display name, and `backfillDisplayNames()` (runnable from
+the editor's Run button) fills those in later. It
 replaces the earlier hand-edited version and fixes the "someone chats in
 but their userId never reaches `LINE Users`" bug — see
 `docs/line-users-troubleshooting.md` for the full ranked cause list. The
@@ -325,6 +341,9 @@ substantive changes over the old relay:
   opening the Apps Script editor. An empty `Relay Log` plus a reachable
   relay means LINE isn't calling it at all — a Console/OA-Manager problem,
   not a code one.
+- `ensureSheet_` repairs only *empty* header cells on an existing tab, so the
+  pre-existing 3-column `LINE Users` gains the 4th header without renaming the
+  columns someone already titled.
 - `mirrorUsersToKv_()` copies the `LINE Users` tab into the `lineUsers` KV
   key on every event, so `กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา` fills itself.
   Previously nothing populated that key and admin had to paste each userId
