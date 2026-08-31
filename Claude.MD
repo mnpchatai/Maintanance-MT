@@ -297,11 +297,39 @@ when the client sent no `userIds`, and no longer broadcasts to every OA
 friend if neither source has a recipient (see the note above). This was
 a hand-edit made directly in the Apps Script editor, since that code
 isn't in this repo.
-Nothing populates the `lineUsers` KV key automatically yet either — the
-relay logs followers to the `LINE Users` sheet tab only. Until it
-also mirrors them into KV (or the main script exposes that tab via a
-`doGet('lineUsers')` branch), admin adds people on that screen by
-pasting a userId + name copied out of the `LINE Users` tab.
+The relay source now lives in this repo as `docs/line-relay.gs` — a
+credential-free template meant to be pasted over `Code.gs` in the "LineOA
+MT" editor (it reads `SPREADSHEET_ID`, `LINE_CHANNEL_ACCESS_TOKEN` and
+`LINE_CHANNEL_SECRET` from Apps Script **Script properties**, so no secret
+ever enters git; the live values still only exist in that project). It
+replaces the earlier hand-edited version and fixes the "someone chats in
+but their userId never reaches `LINE Users`" bug — see
+`docs/line-users-troubleshooting.md` for the full ranked cause list. The
+substantive changes over the old relay:
+- Appends the `userId` row **before** calling the LINE profile API, with
+  the name fetch demoted to a best-effort `try/catch`. The old order meant
+  an expired/unre-entered `LINE_CHANNEL_ACCESS_TOKEN` threw mid-event and
+  dropped the whole row, even though the `userId` was already in hand.
+- Handles `message`/`postback`/`join`/`memberJoined`/`unfollow`, not just
+  `follow` — anyone already friends with the OA never emits `follow` again,
+  so chatting in could never log them.
+- Creates the `LINE Users` tab (and header) on demand, and upserts by
+  `userId` instead of appending duplicate rows.
+- Never throws out to LINE (LINE disables a webhook that keeps failing);
+  every failure is appended to a new `Relay Log` tab in the same Sheet,
+  which is the first place to look when a chat doesn't show up.
+- `doGet('?key=selftest')` reports whether the Sheet opens, whether the
+  access token works, and how many rows `LINE Users` holds. The Settings
+  page calls this (see `runLineRelayTest()` in `index.html`) so an admin
+  can tell a broken relay apart from a webhook LINE never sent, without
+  opening the Apps Script editor. An empty `Relay Log` plus a reachable
+  relay means LINE isn't calling it at all — a Console/OA-Manager problem,
+  not a code one.
+- `mirrorUsersToKv_()` copies the `LINE Users` tab into the `lineUsers` KV
+  key on every event, so `กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา` fills itself.
+  Previously nothing populated that key and admin had to paste each userId
+  in by hand; the manual add box is kept for users with no `source.userId`
+  (someone messaging from a group without having friended the OA).
 Git workflow used throughout this project
 Every change so far: branch off `main` → edit `index.html` → commit → push →
 `mcp__github__create_pull_request` → `mcp__github__merge_pull_request`
@@ -339,10 +367,8 @@ control" under `index.html` above for the whole design and the reasons.
 Short version: anyone with the app link can open it in any browser, ask
 for access, and an `admin` grants a role in-app; LIFF is gone. The only
 remaining manual steps are seeding the first `admin` row in the sheet,
-and the two relay-script edits noted in the "LineOA MT" section (honour
-`userIds`, mirror followers into the `lineUsers` KV key) — both optional,
-both purely about making LINE notifications land on the right person
-instead of broadcasting.
+and pasting `docs/line-relay.gs` into the "LineOA MT" editor (it already
+honours `userIds` and mirrors followers into the `lineUsers` KV key).
 Core workflow (submit → FM approve → GM approve → assign → in-progress →
 done), Sheets persistence, near-real-time polling, and the simplified
 Settings page are all done and merged to `main`.
