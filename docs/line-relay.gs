@@ -144,6 +144,25 @@ function selfTest_(){
   }
 
   r.checks.channelSecret = { ok: !!channelSecret_() && channelSecret_().indexOf('PUT_') !== 0 };
+
+  // ดึงรายชื่อเพื่อนย้อนหลังได้ไหม (backfillFollowers) — เปิดให้เฉพาะ OA verified/premium
+  try{
+    var f = UrlFetchApp.fetch('https://api.line.me/v2/bot/followers/ids?limit=1', {
+      headers:{ Authorization:'Bearer ' + accessToken_() },
+      muteHttpExceptions:true
+    });
+    var fc = f.getResponseCode();
+    r.checks.followersApi = (fc === 200)
+      ? { ok:true, note:'ดึงรายชื่อเพื่อนย้อนหลังได้ — รัน backfillFollowers จากปุ่ม Run ในเอดิเตอร์' }
+      : { ok:false, httpCode:fc,
+          note: fc === 403
+            ? 'OA นี้ไม่ใช่ verified/premium จึงดึงรายชื่อเพื่อนย้อนหลังไม่ได้ — ต้องให้แต่ละคนทักเข้ามาคนละครั้ง'
+            : 'ตรวจ LINE_CHANNEL_ACCESS_TOKEN ก่อน' };
+    // ไม่ตั้ง r.ok = false — ดึงย้อนหลังไม่ได้ไม่ได้แปลว่า relay พัง
+  }catch(err){
+    r.checks.followersApi = { ok:false, error:String(err) };
+  }
+
   return r;
 }
 
@@ -228,6 +247,107 @@ function upsertLineUser_(userId, displayName, eventType){
   }
   sh.appendRow([userId, displayName || '', now, eventType || '']);
   return true;
+}
+
+/**
+ * ดึง "เพื่อนทั้งหมดของ OA" มาลงแท็บ LINE Users ย้อนหลังในทีเดียว — รันจากปุ่ม Run ในเอดิเตอร์
+ * (เลือก backfillFollowers จากดรอปดาวน์ข้างปุ่ม Run แล้วกด Run)
+ *
+ * ใช้เก็บคนที่เคยทักเข้ามาก่อนที่ relay จะกลับมาทำงาน โดยไม่ต้องรอให้แต่ละคนทักใหม่
+ * กันซ้ำด้วยการอ่าน userId ที่มีอยู่ในชีตขึ้นมาทำเป็น set ก่อน แล้วเขียนเฉพาะรายที่ยังไม่มี
+ * แถวเดิมจึงไม่ถูกแตะเลย ทั้งชื่อและเวลาที่บันทึกไว้แล้วยังอยู่ครบ
+ *
+ * ข้อจำกัดของ LINE: endpoint นี้เปิดให้เฉพาะ OA ที่เป็น verified หรือ premium
+ * บัญชีทั่วไปจะได้ HTTP 403 กลับมา (ดูทางออกสำรองใน docs/line-users-troubleshooting.md)
+ * และต้องตั้ง LINE_CHANNEL_ACCESS_TOKEN ใน Script properties ก่อน ไม่งั้นจะได้ 401
+ *
+ * หมายเหตุ: ได้เฉพาะคนที่ยังเป็นเพื่อนกับ OA อยู่ ใครที่บล็อกหรือลบ OA ไปแล้วจะไม่อยู่ในรายการ
+ */
+function backfillFollowers(){
+  var header = ['userId', 'ชื่อที่แสดง', 'ทักเข้ามาล่าสุด', 'event ล่าสุด'];
+  var sh = ensureSheet_(USERS_SHEET, header);
+  if(!sh){ console.log('เปิดชีตไม่ได้ — ตรวจ SPREADSHEET_ID'); return; }
+
+  // อ่าน userId ที่มีอยู่แล้วทั้งหมดขึ้นมาครั้งเดียว ใช้เป็นตัวกันซ้ำ
+  // (ไม่เรียก upsertLineUser_ ทีละคน เพราะอันนั้นอ่านชีตใหม่ทุกครั้ง ช้ามากเมื่อคนเยอะ)
+  var existing = {};
+  if(sh.getLastRow() >= 2){
+    var have = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    for(var i = 0; i < have.length; i++){
+      var id0 = String(have[i][0] || '').trim();
+      if(id0) existing[id0] = true;
+    }
+  }
+  var before = 0;
+  for(var k in existing){ if(existing.hasOwnProperty(k)) before++; }
+
+  var start = '', added = 0, scanned = 0, pages = 0, now = new Date();
+  while(true){
+    var url = 'https://api.line.me/v2/bot/followers/ids?limit=1000' +
+              (start ? '&start=' + encodeURIComponent(start) : '');
+    var res;
+    try{
+      res = UrlFetchApp.fetch(url, {
+        headers:{ Authorization:'Bearer ' + accessToken_() },
+        muteHttpExceptions:true
+      });
+    }catch(err){
+      log_('backfillFollowers', 'ยิง API ไม่สำเร็จ: ' + err);
+      console.log('ยิง API ไม่สำเร็จ: ' + err);
+      return;
+    }
+
+    var code = res.getResponseCode();
+    if(code === 403){
+      var m403 = 'LINE ปฏิเสธ (403) — endpoint /v2/bot/followers/ids เปิดให้เฉพาะ OA ที่เป็น ' +
+                 'verified หรือ premium เท่านั้น บัญชีทั่วไปดึงรายชื่อเพื่อนย้อนหลังไม่ได้ ' +
+                 'ให้ใช้วิธีสำรองแทน (ดู docs/line-users-troubleshooting.md)';
+      log_('backfillFollowers', m403); console.log(m403); return;
+    }
+    if(code === 401){
+      var m401 = 'LINE ปฏิเสธ (401) — ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN ใน Script properties ' +
+                 'หรือ token ผิด/หมดอายุ';
+      log_('backfillFollowers', m401); console.log(m401); return;
+    }
+    if(code !== 200){
+      var mx = 'LINE ตอบ HTTP ' + code + ' : ' + res.getContentText().slice(0, 300);
+      log_('backfillFollowers', mx); console.log(mx); return;
+    }
+
+    var body = safeParse_(res.getContentText()) || {};
+    var list = body.userIds || [];
+    var rows = [];
+    for(var j = 0; j < list.length; j++){
+      var id = String(list[j] || '').trim();
+      if(!id) continue;
+      scanned++;
+      if(existing[id]) continue;   // มีอยู่แล้ว — ข้าม ไม่แตะแถวเดิม
+      existing[id] = true;         // กันซ้ำกันเองภายในรอบนี้ด้วย
+      rows.push([id, '', now, 'backfill']);
+    }
+    // เขียนทีเดียวทั้งหน้า เร็วกว่า appendRow ทีละแถวมาก
+    if(rows.length){
+      sh.getRange(sh.getLastRow() + 1, 1, rows.length, header.length).setValues(rows);
+      added += rows.length;
+    }
+
+    start = body.next || '';
+    pages++;
+    if(!start) break;
+    if(pages >= 50){   // กันวนไม่รู้จบถ้า cursor เพี้ยน (50 หน้า = 50,000 คน)
+      log_('backfillFollowers', 'หยุดที่ 50 หน้า — มีเพื่อนเยอะผิดปกติ ตรวจสอบด้วย');
+      break;
+    }
+    Utilities.sleep(200);
+  }
+
+  try{ mirrorUsersToKv_(); }
+  catch(err){ log_('backfillFollowers', 'mirror ไม่สำเร็จ: ' + err); }
+
+  var msg = 'ตรวจเพื่อน ' + scanned + ' คน · เพิ่มใหม่ ' + added + ' คน · มีอยู่เดิม ' + before + ' คน (ไม่แตะ)';
+  log_('backfillFollowers', msg);
+  console.log(msg);
+  if(added) console.log('ถัดไป: รัน backfillDisplayNames เพื่อเติมชื่อให้แถวที่เพิ่งเพิ่ม');
 }
 
 /**
