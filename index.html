@@ -1965,13 +1965,19 @@ function renderAccessRequests(){
   // โชว์ควบ "ชื่อจริง (ชื่อไลน์)" เมื่อรู้ทั้งสองอย่าง — ชื่อจริงมาจากที่ admin พิมพ์เอง (คอลัมน์ชื่อใน
   // ชีตผู้รับ หรือ lineUserRoles เก่า) ส่วนชื่อไลน์คือชื่อโปรไฟล์ที่เจ้าตัวตั้งเอง (แท็บ LINE Users)
   // เดิมชื่อไลน์ทับชื่อจริงเสมอ ทำให้ดรอปดาวน์ขึ้นเป็นชื่อเล่น/อีโมจิจนผูกผิดคนได้ง่าย
+  // เทียบชื่อแบบไม่สนช่องว่าง/รูปแบบ Unicode: ชื่อเดียวกันที่พิมพ์คนละที่มักต่างกันแค่เว้นวรรคซ้ำ,
+  // nbsp หรืออักขระความกว้างศูนย์ ถ้าเทียบตรงๆ จะกลายเป็น "อุดม หนานคำ (อุดม หนานคำ)" ซ้ำสองรอบ
+  const sameName_ = (a, b) => {
+    const norm = t => String(t).normalize('NFC').replace(/[\s\u00a0\u200b-\u200d\ufeff]/g, '').toLowerCase();
+    return norm(a) === norm(b);
+  };
   const lineLabelFor = (id) => {
     const known = state.lineUsers.find(u => u.userId === id) || {};
     const fromSheet = lineRecipientById[id];
     const lineName = String(known.displayName || '').trim();
     const realName = String((fromSheet && fromSheet.name)
       || (state.lineUserRoles[id] && state.lineUserRoles[id].name) || '').trim();
-    if(realName && lineName && realName !== lineName) return `${realName} (${lineName})`;
+    if(realName && lineName && !sameName_(realName, lineName)) return `${realName} (${lineName})`;
     return realName || lineName || id;
   };
   const lineUserOptsFor = (cur) => {
