@@ -340,7 +340,7 @@ let state = {
   filterDept: 'ALL',
   updateAvailable: false,
   ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
-    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null,
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null,
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{},
     lineRole:{}, lineTechName:{}, lineName:{}, newLineUserId:'', newLineUserName:'' },
@@ -362,7 +362,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-26.4';
+const APP_VERSION = '2026-08-31.1';
 
 async function storeGet(key){
   try{
@@ -485,6 +485,49 @@ async function runConnectionTest(){
     verdict = '⚠️ ผลไม่ชัดเจน — ลองกดทดสอบอีกครั้ง';
   }
   state.ui.connTest = { at: Date.now(), url: rolesUrl, verdict, roles, kv };
+  render();
+}
+
+/* ตรวจสุขภาพ relay LINE ("LineOA MT") จากในแอป — ใช้ตอนมีคนทักหา OA แล้ว userId ไม่ขึ้น
+   ในแท็บ "LINE Users" จะได้รู้ว่าปัญหาอยู่ที่ relay (เปิดชีตไม่ได้ / token หมดอายุ) หรือ
+   อยู่ที่ LINE Developers Console (ยิง webhook มาไม่ถึง relay เลย) โดยไม่ต้องเปิด Apps Script
+   relay ตอบ ?key=selftest เป็น JSON — ดูโค้ดฝั่ง relay ได้ที่ docs/line-relay.gs */
+async function runLineRelayTest(){
+  const url = lineRelayUrl();
+  if(!url){ toast('ยังไม่ได้ตั้งค่า URL ของ relay', true); return; }
+  state.ui.lineTest = { running:true };
+  render();
+  const res = await probeUrl(url + (url.indexOf('?') >= 0 ? '&' : '?') + 'key=selftest');
+  let data = null;
+  try{ data = JSON.parse(res.text); }catch(e){ /* ไม่ใช่ JSON — ดูข้อความดิบแทน */ }
+
+  const lines = [];
+  let verdict;
+  if(!res.ok && !res.status){
+    verdict = '❌ ยิงไปที่ relay ไม่ได้เลย — ตรวจว่า URL ถูกต้อง และ Apps Script → Deploy → Manage deployments ตั้ง "Who has access" เป็น Anyone แล้ว Deploy เวอร์ชันใหม่';
+  } else if(!data){
+    verdict = '⚠️ relay ตอบกลับมาแต่ไม่ใช่ JSON — มักแปลว่าโดน redirect ไปหน้า login ของ Google (ตั้ง "Who has access" เป็น Anyone) หรือโค้ดใน relay ยังเป็นเวอร์ชันเก่าที่ไม่มี selftest (วางโค้ดจาก docs/line-relay.gs ทับแล้ว Deploy ใหม่)';
+  } else {
+    const c = data.checks || {};
+    if(c.spreadsheet) lines.push(c.spreadsheet.ok
+      ? `✅ เปิดชีตได้: ${c.spreadsheet.name}`
+      : `❌ เปิดชีตไม่ได้ (SPREADSHEET_ID=${c.spreadsheet.id || '-'}) — ${c.spreadsheet.fix || ''}`);
+    if(c.usersSheet) lines.push(c.usersSheet.ok
+      ? `✅ แท็บ LINE Users มี ${c.usersSheet.rows} รายชื่อ`
+      : `⚠️ ${c.usersSheet.error || 'ยังไม่มีแท็บ LINE Users'} — ${c.usersSheet.fix || ''}`);
+    if(c.accessToken) lines.push(c.accessToken.ok
+      ? '✅ LINE_CHANNEL_ACCESS_TOKEN ใช้งานได้'
+      : `❌ token ใช้ไม่ได้ (HTTP ${c.accessToken.httpCode || '-'}) — ${c.accessToken.fix || ''}`);
+
+    if(data.ok && c.usersSheet && c.usersSheet.ok && c.usersSheet.rows === 0){
+      verdict = '⚠️ relay ตั้งค่าถูกหมดแล้ว แต่ยังไม่มีใครถูกบันทึกเลยสักคน — แปลว่า LINE ยิง webhook มาไม่ถึง relay ให้ไปตั้ง Webhook URL + เปิดสวิตช์ "Use webhook" ที่ developers.line.biz → Messaging API และปิดการตอบกลับอัตโนมัติใน LINE OA Manager';
+    } else if(data.ok){
+      verdict = '✅ relay ปกติดีทุกข้อ — ถ้ายังมีคนทักแล้วไม่ขึ้น ให้เปิดแท็บ "Relay Log" ในชีตเพื่อดูว่าตกที่ขั้นไหน';
+    } else {
+      verdict = '❌ relay ตั้งค่าไม่ครบ — แก้ตามรายการด้านล่าง แล้วกดทดสอบใหม่';
+    }
+  }
+  state.ui.lineTest = { at: Date.now(), url, verdict, lines, res };
   render();
 }
 /* ผูกเครื่องนี้กับรหัสประจำเครื่องเดิมที่ผู้ดูแลใส่ไว้ในชีตแล้ว — ทางออกเมื่อรหัสเดิมหายไป
@@ -2124,6 +2167,13 @@ function renderLineUserRoles(){
 }
 
 function renderSettings(){
+  const lt = state.ui.lineTest;
+  const lineTestBox = !lt ? '' : (lt.running ? `<div class="auth-note">กำลังทดสอบ relay...</div>` : `
+    <div class="auth-note">
+      <b>ผลการทดสอบ</b><br>${escapeHtml(lt.verdict)}
+      ${(lt.lines || []).length ? `<ul style="margin:8px 0 0; padding-left:18px; font-size:12.5px;">${lt.lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>` : ''}
+      <pre style="white-space:pre-wrap; word-break:break-all; font-size:11.5px; background:#efece4; border-radius:6px; padding:8px; margin:8px 0 0; max-height:160px; overflow:auto;">HTTP ${lt.res.status || 'ล้มเหลว'}\n${escapeHtml(lt.res.text || '')}</pre>
+    </div>`);
   const webhookRoles = ['admin','fm','gm','maint','tech','requester'];
   const webhookRoleOpts = webhookRoles.map(r=>`<option value="${r}" ${state.ui.newWebhookRole===r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('');
   const webhookRows = webhookRoles.map(r => `
@@ -2167,6 +2217,12 @@ function renderSettings(){
       <input class="input" data-fid="newWebhookUrl" placeholder="https://..." oninput="state.ui.newWebhookUrl=this.value">
       <button class="btn btn-outline btn-sm" onclick="saveWebhook()">บันทึก</button>
     </div>
+    <h3 style="margin-top:20px;">ตรวจสอบ relay LINE</h3>
+    <p class="desc">ใช้เมื่อมีคนทักหา LINE OA แล้ว userId ไม่ขึ้นในแท็บ <b>LINE Users</b> — จะบอกได้ว่าปัญหาอยู่ที่ relay เองหรืออยู่ที่การตั้งค่า Webhook ฝั่ง LINE</p>
+    <div class="order-actions">
+      <button class="btn btn-outline btn-sm" onclick="runLineRelayTest()">ทดสอบ relay ตอนนี้</button>
+    </div>
+    ${lineTestBox}
   </div>
 
   <div class="settings-section card">
