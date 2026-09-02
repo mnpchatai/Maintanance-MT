@@ -247,6 +247,29 @@ input rather than dead-ending. That attempt is deliberately `quiet` on
 mobile, so only a *manual* tap on the hint link surfaces the error toast; on
 desktop the fallthrough does toast first, otherwise the file dialog appearing
 after ถ่ายภาพ looks like the original bug all over again.
+LINE's Android WebView is the case where *both* paths are dead: it never
+implements the camera permission prompt, so `getUserMedia` rejects
+(`NotAllowedError`/`NotFoundError`), and `capture` opens the Android photo
+picker — filmed in the field, the ถ่ายภาพ button landing straight in the
+album. So when the in-app camera fails on a mobile in-app browser
+`takePhoto()` stops instead of falling through to the picker: falling
+through is exactly what looks like "the app jumped to the album by itself".
+It sets `state.ui.camBlocked` (and `state.ui.camErr`, the DOMException name,
+shown in the panel so a screenshot is enough to diagnose) and re-renders;
+`photoFallbackHint()` then swaps the one-line link for `camBlockedPanel()` —
+open-in-real-browser link, a "ลองเปิดกล้องของเครื่อง" button for devices
+where `capture` does work, and the workaround that always works (shoot with
+the phone's camera app, attach via เลือกจากอัลบั้ม). A successful
+`openInAppCamera()` clears the flag. Desktop still falls through to the file
+dialog, which is a usable substitute there — it only needs the toast.
+`externalBrowserUrl()` appends `openExternalBrowser=1` for LINE (LINE hands
+that link to the system browser) and builds an `intent://…package=com.android.chrome`
+URL for other Android WebViews. It must stay behind an `<a target="_blank">`:
+assigning `location.href` would reload the page in the WebView that doesn't
+honor it and wipe the half-typed form, which is not persisted anywhere.
+`startCamStream()` retries once with a bare `{video:true}` when the detailed
+constraints throw — but not on `NotAllowedError`/`SecurityError`, where a
+retry cannot help.
 `updateCamFlipVisibility()` hides สลับกล้อง when `enumerateDevices()` counts
 one camera (typical desktop). It hides only on a successful count — if the
 enumeration throws, the button stays, since a phone that can't be enumerated
