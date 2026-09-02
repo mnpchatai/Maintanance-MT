@@ -456,6 +456,64 @@ when the client sent no `userIds`, and no longer broadcasts to every OA
 friend if neither source has a recipient (see the note above). This was
 a hand-edit made directly in the Apps Script editor, since that code
 isn't in this repo.
+**Root cause found (2 Sep 2026): nothing ever wrote the `lineRecipients`
+KV key, so the hand-typed `แจ้งเตือน LINE - ผู้รับ` rows were silently
+dropped from every notification the app could route itself.** The
+`userIds` union above names three sources, but `storeGet('lineRecipients')`
+read a key no script produced — the relay only mirrored `lineUsers` — so
+`state.lineRecipients` was permanently `[]`. Because `handleNotifyRequest_`
+skipped its own sheet lookup the moment `userIds` came in non-empty, one
+person bound through a คำขอสิทธิ์ row was enough to cut every sheet-only
+recipient out of that role. Worse, the person-targeted paths added in #11
+(`notifyOrderRequester`, `sendLineToTech`) post **no** `role` at all, so
+when `lineIdsForPerson()` came up empty — the normal case, since the sheet
+rows were invisible and most people have no LINE bound — the message had
+no fallback and was dropped with only a `console.warn`. Requester and
+technician notifications, the bulk of the traffic, went dead that day.
+Fixed on three fronts, each independently sufficient for part of the
+problem:
+- `mirrorRecipientsToKv_()` in the relay now writes the `lineRecipients`
+  key from the sheet tab, piggybacked on every existing `mirrorUsersToKv_()`
+  call site plus `?key=selftest` and a new `?key=sync`, and runnable from
+  the editor as `syncRecipientsNow()`. Requires pasting the updated
+  `docs/line-relay.gs` and redeploying.
+- `alsoSheet:true` on the outgoing payload asks the relay to **merge** its
+  sheet rows with the client's `userIds` (deduped) instead of choosing one
+  source. An un-redeployed relay ignores the unknown field and behaves as
+  before, so this is safe to ship ahead of the paste.
+- The person-targeted paths now pass a `fallbackRole` used only when no
+  specific LINE id resolves: the technician's own name for `sendLineToTech`
+  (still one person — the relay accepts a name as `role`), `requester` for
+  `notifyOrderRequester`, which prefixes the message with `(ถึง: <ชื่อ>)`
+  so a shared recipient can tell whose order it is. This deliberately
+  softens #11: a message reaching an explicitly-configured sheet row beats
+  a message reaching nobody, and #11's real guarantee — never broadcasting
+  to every OA friend — is untouched. Binding LINE to the คำขอสิทธิ์ row is
+  still the right fix and keeps delivery to exactly one person.
+These paths run entirely in the app, so they work against the currently
+deployed relay with no Apps Script change.
+
+**Diagnosability.** Every send now goes through `postToRelay()`, which
+reads the relay's `{ ok, sent, targets }` reply instead of discarding it,
+and appends the outcome to `state.lineSendLog` (in-memory, last 30, this
+session only). `pushNotification` toasts when a send provably reached
+nobody. Settings gained three panels: a real **ส่งข้อความทดสอบ** that walks
+the identical path and reports how many messages went out, a per-role
+recipient count computed with the same `lineRecipientsForRole()` used for
+real sends, and the send log. `sent === 0` and a failed `fetch` are kept
+distinct: an Apps Script redirect can make the response unreadable
+cross-origin *after* the POST has landed, so that case logs `ok: null`
+("ไม่ทราบผล") and never claims a failure.
+
+**Routing-data race.** `loadNotifyRouting()` was fire-and-forget from
+`loadBackground()` and had no retry — the 3s poll skips these keys for
+non-admins — so a button pressed before it landed, or a single failed
+load, left `lineRecipientsForRole()` and `lineIdsForPerson()` with nothing
+to match against for the rest of the session. `ensureNotifyRoutingReady()`
+memoizes the load, clears the memo when `storeGet` reports failure
+(`undefined`, as distinct from an empty result), and is awaited by every
+sender.
+
 **Root cause found (31 Aug 2026): the relay's `SPREADSHEET_ID` was still
 `1er3WPCHJmV8_lioD-9gShr5mWDaajvXEYrEaaV-_p-k`** — the old
 `thtwgot@gmail.com` account's Sheet — while the database moved to

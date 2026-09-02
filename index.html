@@ -392,6 +392,7 @@ let state = {
   lineUsers: [],       // ผู้ใช้ LINE ที่ทักเข้ามาหา OA (มาจากแท็บ "LINE Users" ในชีต)
   lineUserRoles: {},   // userId -> { name, roles:[], techName } กำหนดโดย admin ในหน้าตั้งค่า
   lineRecipients: [],  // { role, userId, name } อ่านอย่างเดียวจากแท็บ "แจ้งเตือน LINE - ผู้รับ" ที่พิมพ์เองในชีต
+  lineSendLog: [],     // ผลการยิงแจ้งเตือน LINE ล่าสุด (ในหน่วยความจำ) — ดูได้ที่หน้าตั้งค่า
   authStatus: 'loading', // loading | guest | pending | rejected | ok
   view: 'new',
   config: { departments: DEPT_DEFAULT, machines: MACHINES_DEFAULT, technicians: TECH_DEFAULT, lineWebhooks:{} },
@@ -409,7 +410,7 @@ let state = {
   filterDept: 'ALL',
   updateAvailable: false,
   ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
-    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null,
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
     newLineUserId:'', newLineUserName:'',
@@ -432,7 +433,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-02.3';
+const APP_VERSION = '2026-09-02.4';
 
 async function storeGet(key){
   try{
@@ -598,6 +599,24 @@ async function runLineRelayTest(){
     }
   }
   state.ui.lineTest = { at: Date.now(), url, verdict, lines, res };
+  render();
+}
+/* ยิงข้อความทดสอบเข้า LINE จริงตามบทบาทที่เลือก แล้วบอกผลตรงๆ ว่าถึงกี่คน
+   ต่างจาก "ทดสอบ relay" ตรงที่อันนั้นตรวจแค่การตั้งค่า ส่วนอันนี้เดินเส้นทางเดียวกับการแจ้งเตือน
+   จริงทุกขั้น (หาผู้รับในแอป → ยิงเข้า relay → relay push เข้า LINE) จึงใช้ยืนยันก่อนเริ่มใช้งานได้ */
+async function runLineSendTest(){
+  const role = state.ui.testSendRole || 'admin';
+  state.ui.testSend = { running:true, role };
+  render();
+  await ensureNotifyRoutingReady();
+  const ids = lineRecipientsForRole(role);
+  const stamp = new Date().toLocaleString('th-TH', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  const res = await tryLineWebhook(role, `[ทดสอบระบบ] ข้อความทดสอบการแจ้งเตือนของบทบาท "${ROLES[role] ? ROLES[role].label : role}" เมื่อ ${stamp} — ถ้าท่านได้รับข้อความนี้ แปลว่าการแจ้งเตือน LINE ใช้งานได้ปกติ`);
+  let verdict;
+  if(res.ok === null) verdict = '⚠️ ส่งคำขอออกไปแล้วแต่อ่านผลตอบกลับไม่ได้ — ให้ดูที่มือถือว่าข้อความเข้าหรือไม่ (' + (res.note || '') + ')';
+  else if(res.ok) verdict = `✅ relay ส่งสำเร็จ ${res.sent} ข้อความ — ตรวจที่ LINE ของผู้รับได้เลย`;
+  else verdict = '❌ ไม่ถึงใครเลย — ' + (res.note || 'relay ไม่พบผู้รับสำหรับบทบาทนี้') + (ids.length ? '' : `\nแอปหา LINE ของบทบาท "${role}" ไม่เจอสักคน ให้ผูก LINE ให้ผู้ใช้ในหัวข้อ "คำขอสิทธิ์เข้าใช้งาน" ด้านบน หรือเพิ่มแถว (บทบาท=${role}, userId) ในแท็บ "แจ้งเตือน LINE - ผู้รับ" ของชีต`);
+  state.ui.testSend = { at: Date.now(), role, verdict, appIds: ids.length };
   render();
 }
 /* ผูกเครื่องนี้กับรหัสประจำเครื่องเดิมที่ผู้ดูแลใส่ไว้ในชีตแล้ว — ทางออกเมื่อรหัสเดิมหายไป
@@ -947,7 +966,7 @@ async function loadBackground(){
   state.notifications = notifs || [];
   state.ordersLoaded = true;
   render();
-  loadNotifyRouting();   // ไม่ต้องรอ: ใช้ตอนกดปุ่มที่ยิงแจ้งเตือนเท่านั้น ไม่มีผลกับหน้าจอ
+  ensureNotifyRoutingReady();   // เริ่มโหลดล่วงหน้า ไม่ต้องรอ — ตัวที่ยิงแจ้งเตือนจะ await เองอีกที
 }
 /* ผู้รับแจ้งเตือน LINE (lineUserRoles + lineRecipients) — คนที่กดปุ่มในใบแจ้งซ่อมเป็นคนยิงแจ้งเตือนเอง
    ไม่ใช่แค่ admin เครื่องของทุกคนจึงต้องรู้ว่าบทบาทไหนส่งถึง LINE ไหน (ดู lineRecipientsForRole)
@@ -960,6 +979,24 @@ async function loadNotifyRouting(){
   if(state.lineDataLoaded) return;   // หน้าตั้งค่าโหลดชุดเต็มแซงไปแล้วระหว่างรอ อย่าเขียนทับของใหม่ด้วยของเก่า
   if(lineUserRoles && typeof lineUserRoles === 'object') state.lineUserRoles = lineUserRoles;
   if(Array.isArray(lineRecipients)) state.lineRecipients = lineRecipients;
+  // storeGet คืน undefined เมื่อดึงไม่สำเร็จ (เน็ตกระตุก / Apps Script ช้า) — ถือว่ายังไม่พร้อม
+  // เพื่อให้ ensureNotifyRoutingReady() ลองใหม่ในครั้งถัดไป แทนที่จะจำผลที่ล้มเหลวไว้ทั้ง session
+  return lineUserRoles !== undefined && lineRecipients !== undefined;
+}
+/* รอให้ข้อมูล "ใครรับแจ้งเตือนบทบาทไหน" พร้อมก่อนยิง LINE เสมอ
+   เดิม loadNotifyRouting() ถูกเรียกแบบไม่รอผลจาก loadBackground() ที่เดียว ใครกดปุ่มก่อนที่
+   ข้อมูลชุดนี้จะมาถึง (เปิดจากลิงก์แจ้งเตือนแล้วกดอนุมัติทันที / เน็ตช้า) จะหาผู้รับไม่เจอแล้ว
+   ข้อความหายไปเงียบๆ — และถ้ารอบนั้นโหลดพลาด ก็ไม่มีใครโหลดซ้ำให้อีกเลยทั้ง session
+   เพราะรอบ poll ทุก 3 วิ ข้ามคีย์กลุ่มนี้ให้ทุกคนที่ไม่ใช่ admin */
+let notifyRoutingPromise = null;
+function ensureNotifyRoutingReady(){
+  if(state.lineDataLoaded) return Promise.resolve(true);
+  if(!notifyRoutingPromise){
+    notifyRoutingPromise = loadNotifyRouting()
+      .then(ok => { if(!ok) notifyRoutingPromise = null; return ok; })
+      .catch(e => { notifyRoutingPromise = null; console.warn('โหลดข้อมูลผู้รับแจ้งเตือนไม่สำเร็จ', e); return false; });
+  }
+  return notifyRoutingPromise;
 }
 /* ข้อมูลเฉพาะหน้า "ตั้งค่าข้อมูลหลัก" ของ admin — คนอื่นไม่เคยต้องใช้เลย จึงโหลดแบบขี้เกียจ (lazy)
    แค่ตอน admin เข้าหน้านี้จริงๆ (เรียกจาก setView) ไม่ต้องรวมอยู่ใน initial load ของทุกคน */
@@ -1084,31 +1121,94 @@ function lineRelayUrl(role){
   const hooks = state.config.lineWebhooks || {};
   return (role && hooks[role]) || Object.values(hooks).find(Boolean) || '';
 }
-/* ส่งถึง userId ที่ระบุมาเท่านั้น — payload ไม่มีฟิลด์ role ติดไปด้วยโดยตั้งใจ เพราะ relay จะ
-   ตกไปอ่านชีต "แจ้งเตือน LINE - ผู้รับ" ตาม role ทันทีที่ userIds ว่าง (ดู handleNotifyRequest_)
-   ซึ่งเป็นทางที่ทำให้แจ้งเตือนเฉพาะบุคคลกลายเป็นส่งหาทุกคนในบทบาทนั้นแทน */
-async function sendLineToUserIds(userIds, message){
-  const ids = [...new Set((userIds || []).map(x => String(x || '').trim()).filter(Boolean))];
-  if(!ids.length) return;
-  const url = lineRelayUrl();
-  if(!url) return;
-  try{
-    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ userIds: ids, message, at: nowIso() }) });
-  }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
+/* ============================= แกนกลางการส่ง LINE =============================
+   ทุกการยิงแจ้งเตือนผ่านฟังก์ชันเดียวนี้ เพื่อให้ได้สามอย่างที่เดิมไม่มีเลย
+   1) "รอ" ให้ข้อมูลผู้รับ (lineUserRoles / lineRecipients / accessRequests) โหลดเสร็จก่อนเสมอ
+      เดิม loadNotifyRouting() ถูกยิงแบบไม่รอผล ใครกดปุ่มเร็วกว่าที่ข้อมูลจะมาถึงจะหาผู้รับไม่เจอ
+      แล้วข้อความหายไปเงียบๆ ทั้งใบ
+   2) อ่านคำตอบของ relay จริงๆ ว่าส่งถึงกี่คน (relay ตอบ { ok, sent, targets }) แทนที่จะทิ้ง
+      ผลลัพธ์แล้วเดาเอาว่าสำเร็จ
+   3) เก็บผลทุกครั้งไว้ใน state.lineSendLog ให้เปิดดูย้อนหลังได้ที่หน้าตั้งค่า — เดิมทุกความ
+      ผิดพลาดถูกกลืนหายไปใน console.warn จึงตอบไม่ได้เลยว่า "ทำไมไม่ได้รับแจ้งเตือน" */
+function logLineSend(entry){
+  if(!Array.isArray(state.lineSendLog)) state.lineSendLog = [];
+  state.lineSendLog.unshift(Object.assign({ at: Date.now() }, entry));
+  if(state.lineSendLog.length > 30) state.lineSendLog.length = 30;
 }
-/* ปิงช่างที่ได้รับมอบหมายงานใบนั้นเป็นรายคน ไม่ใช่ช่างทุกคนในระบบ */
+/* ยิง payload ไปที่ relay แล้วแปลผลกลับมาเป็น { ok, sent, note }
+   ok === null หมายถึง "ส่งออกไปแล้วแต่อ่านผลไม่ได้" (เบราว์เซอร์บล็อกการอ่าน response ข้ามโดเมน)
+   ซึ่งไม่ใช่ความล้มเหลว — คำขอถึง Apps Script ไปแล้ว จึงห้ามรายงานว่าส่งไม่สำเร็จ */
+async function postToRelay(payload, label){
+  const url = lineRelayUrl(payload.role);
+  if(!url){
+    logLineSend({ label, ok:false, sent:0, note:'ยังไม่ได้ตั้งค่า URL ของ relay' });
+    return { ok:false, sent:0, note:'ยังไม่ได้ตั้งค่า URL ของ relay' };
+  }
+  const body = JSON.stringify(Object.assign({ at: nowIso() }, payload));
+  try{
+    const res = await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body });
+    const text = await res.text();
+    let data = null;
+    try{ data = JSON.parse(text); }catch(e){ /* relay ตอบมาไม่ใช่ JSON */ }
+    if(!data){
+      const note = 'relay ตอบกลับมาแต่ไม่ใช่ JSON (HTTP ' + res.status + ') — มักแปลว่าโดนเด้งไปหน้า login ของ Google ให้ตั้ง Deploy → Who has access = Anyone';
+      logLineSend({ label, ok:false, sent:0, note, raw:text.slice(0,200) });
+      return { ok:false, sent:0, note };
+    }
+    const sent = Number(data.sent || 0);
+    const note = data.note || (sent ? '' : 'relay ไม่พบผู้รับสำหรับการแจ้งเตือนนี้');
+    logLineSend({ label, ok: sent > 0, sent, targets: Number(data.targets || 0), note });
+    return { ok: sent > 0, sent, note };
+  }catch(e){
+    // fetch พังหลังคำขอออกไปแล้วได้ (CORS ตอน redirect ของ Apps Script) — นับเป็น "ไม่ทราบผล"
+    const note = 'ส่งคำขอออกไปแล้วแต่อ่านผลตอบกลับไม่ได้: ' + String((e && e.message) || e);
+    logLineSend({ label, ok:null, sent:null, note });
+    return { ok:null, sent:null, note };
+  }
+}
+/* ส่งถึง userId ที่ระบุมาเท่านั้น — ไม่แนบ role ไปด้วยโดยตั้งใจ เพราะ relay จะตกไปอ่านชีต
+   "แจ้งเตือน LINE - ผู้รับ" ตาม role ทันทีที่ userIds ว่าง (ดู handleNotifyRequest_) ซึ่งจะทำให้
+   แจ้งเตือนเฉพาะบุคคลกลายเป็นส่งหาทุกคนในบทบาทนั้นแทน
+   ถ้าหาตัวคนไม่เจอจริงๆ ให้ผู้เรียกส่ง fallbackRole มา เพื่อยอมให้ relay อ่านชีตแทนการทิ้งข้อความ */
+async function sendLineToUserIds(userIds, message, opts){
+  const o = opts || {};
+  await ensureNotifyRoutingReady();
+  const ids = [...new Set((userIds || []).map(x => String(x || '').trim()).filter(Boolean))];
+  if(ids.length) return await postToRelay({ userIds: ids, message }, o.label || 'เจาะจงบุคคล');
+  // ---- หาผู้รับเจาะจงไม่เจอ ----
+  if(!o.fallbackRole){
+    logLineSend({ label:o.label || 'เจาะจงบุคคล', ok:false, sent:0, note:'ไม่พบ LINE ของผู้รับ และไม่มีทางสำรอง — ส่งเฉพาะการแจ้งเตือนในแอป' });
+    return { ok:false, sent:0 };
+  }
+  // ให้ relay อ่านแถวตามบทบาทในชีต "แจ้งเตือน LINE - ผู้รับ" แทน ดีกว่าปล่อยให้ข้อความหายไปเฉยๆ
+  // (แถวพวกนี้คือคนที่ผู้ดูแลพิมพ์ไว้เอง ไม่ใช่การกระจายมั่วไปทั้ง OA) และเติมชื่อเจ้าของเรื่อง
+  // ลงในข้อความ เพื่อไม่ให้คนที่ได้รับเข้าใจผิดว่าเป็นใบของตัวเอง
+  // เติมชื่อเจ้าของเรื่องเฉพาะตอนที่ทางสำรองอาจถึง "หลายคน" (role=requester) — ถ้าทางสำรองคือชื่อ
+  // คนนั้นเองอยู่แล้ว (role=ชื่อช่าง) ข้อความก็ถึงเจ้าตัวคนเดียว ไม่ต้องมีคำนำหน้าให้รกเปล่าๆ
+  const named = (o.targetName && o.fallbackRole !== o.targetName)
+    ? ('(ถึง: ' + o.targetName + ')\n' + message) : message;
+  const r = await postToRelay({ role:o.fallbackRole, message: named, alsoSheet:true }, (o.label || 'เจาะจงบุคคล') + ' → สำรองตามบทบาท');
+  return r;
+}
+/* ปิงช่างที่ได้รับมอบหมายงานใบนั้นเป็นรายคน ไม่ใช่ช่างทุกคนในระบบ
+   หาช่างคนนั้นในข้อมูลแอปไม่เจอ ให้ relay ไปหาแถวที่ "บทบาท" = ชื่อช่าง ในชีตผู้รับแทน
+   (relay รองรับ role เป็นชื่อคนอยู่แล้ว — ยังเป็นการส่งถึงคนเดียว ไม่ใช่ช่างทุกคน) */
 async function sendLineToTech(techName, message){
-  await sendLineToUserIds(lineIdsForPerson({ techName }), message);
+  await ensureNotifyRoutingReady();
+  return await sendLineToUserIds(lineIdsForPerson({ techName }), message, {
+    fallbackRole: techName, targetName: techName, label: 'ช่าง ' + techName
+  });
 }
 async function tryLineWebhook(role, message){
+  await ensureNotifyRoutingReady();
   const url = lineRelayUrl(role);
-  if(!url) return;
+  if(!url) return { ok:false, sent:0 };
   // ส่ง userIds ไปด้วยเพื่อให้สคริปต์ LINE relay ยิงตรงถึงคนที่ admin กำหนดไว้ได้
-  // (ถ้า relay เวอร์ชันเก่ายังไม่รองรับฟิลด์นี้ ก็จะถูกมองข้ามไปเฉยๆ พฤติกรรมเดิมไม่เปลี่ยน)
+  // alsoSheet: บอก relay ให้ "รวม" แถวตามบทบาทในชีตเข้ากับ userIds ที่ส่งไป แทนที่จะข้ามชีต
+  // ทันทีที่ userIds ไม่ว่าง — เดิมคนที่มีแต่แถวในชีตจะถูกตัดทิ้งทั้งที่ตั้งค่าไว้ถูกต้อง
+  // (relay รุ่นเก่าที่ยังไม่รู้จักฟิลด์นี้จะมองข้ามไปเฉยๆ พฤติกรรมเดิมไม่เปลี่ยน)
   const userIds = lineRecipientsForRole(role);
-  try{
-    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ role, message, userIds, at: nowIso() }) });
-  }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
+  return await postToRelay({ role, message, userIds, alsoSheet:true }, 'บทบาท ' + role);
 }
 
 /* ============================= NOTIFICATIONS ============================= */
@@ -1132,19 +1232,30 @@ async function pushNotification(toRole, orderId, docNumber, message, target){
   state.notifications.unshift(n);
   await storeSet('notifications', state.notifications);
   const text = `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`;
-  if(target) await sendLineToUserIds(target.userIds, text);
-  else await tryLineWebhook(toRole, text);
+  const res = target
+    ? await sendLineToUserIds(target.userIds, text, {
+        fallbackRole: target.fallbackRole || '', targetName: target.name || '', label: `${docNumber} → ${toRole}`
+      })
+    : await tryLineWebhook(toRole, text);
+  // ok === false เท่านั้นที่แปลว่า "ไม่ถึงใครเลยแน่ๆ" (null = ส่งแล้วแต่อ่านผลไม่ได้ ไม่ใช่ความล้มเหลว)
+  // บอกคนที่กดปุ่มไปเลยว่าแจ้งเตือนในแอปบันทึกแล้วแต่ LINE ไม่ออก จะได้ไม่เข้าใจผิดว่าส่งไปแล้ว
+  if(res && res.ok === false) toast('บันทึกแล้ว แต่ส่ง LINE ไม่ออก — ดูสาเหตุที่หน้าตั้งค่า > บันทึกการส่ง LINE', true);
+  return res;
 }
 /* แจ้งเตือนผู้แจ้งซ่อม "ของใบนี้" คนเดียว — หาคนไม่เจอก็ไม่ส่ง ดีกว่าส่งหาผู้แจ้งซ่อมทุกคน */
 async function notifyOrderRequester(o, message){
   const userIds = orderRequesterLineIds(o);
-  // ไม่มี LINE ผูกไว้ = ได้แค่การแจ้งเตือนในแอป (กระดิ่ง) ซึ่งยังถึงเจ้าของใบอยู่ — ตั้งใจให้เงียบ
-  // ไม่ใช่ตกไปส่งหาผู้แจ้งซ่อมทุกคนแทน วิธีแก้คือ admin ผูก LINE ให้คนนั้นในหน้าคำขอสิทธิ์
-  if(!userIds.length) console.warn('ไม่มี LINE ของผู้แจ้งใบ ' + o.docNumber + ' (' + (o.requestedBy || '-') + ') — ส่งเฉพาะการแจ้งเตือนในแอป');
+  // ไม่มี LINE ผูกไว้ = ตกไปใช้แถว requester ในชีตผู้รับ (ดู fallbackRole ด้านล่าง) ซึ่งอาจถึงหลายคน
+  // ทางที่ถูกต้องกว่าคือ admin ผูก LINE ให้คนนั้นในหน้าคำขอสิทธิ์ แล้วใบต่อๆ ไปจะถึงเจ้าตัวคนเดียว
+  if(!userIds.length) console.warn('ไม่มี LINE ของผู้แจ้งใบ ' + o.docNumber + ' (' + (o.requestedBy || '-') + ') — ใช้ทางสำรองตามบทบาท requester');
   await pushNotification('requester', o.id, o.docNumber, message, {
     userIds,
     didHash: o.requesterDidHash || '',
     name: o.requestedBy || '',
+    // ผูก LINE ของคนนี้ไว้ไม่ได้ ก็ยังดีกว่าปล่อยให้ข้อความหายไป: ให้ relay อ่านแถว requester
+    // ในชีต "แจ้งเตือน LINE - ผู้รับ" (แถวที่ผู้ดูแลพิมพ์ไว้เอง) แล้วเติมชื่อผู้แจ้งไว้หน้าข้อความ
+    // ไม่มีแถวนั้นในชีตก็ไม่มีอะไรถูกส่งอยู่ดี — พฤติกรรมจึงยังคุมได้จากในชีตเหมือนเดิม
+    fallbackRole: 'requester',
   });
 }
 /* การแจ้งเตือนใบนี้เป็นของเรารึเปล่า (กระดิ่ง/หน้าการแจ้งเตือนในแอป)
@@ -2569,6 +2680,24 @@ async function removeLegacyLineUserRole(userId){
 }
 
 function renderSettings(){
+  const notifyRoles = ['admin','fm','gm','maint'];
+  const sendTestRoleOpts = notifyRoles.map(r => `<option value="${r}" ${state.ui.testSendRole===r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('');
+  const st = state.ui.testSend;
+  const sendTestBox = !st ? '' : (st.running ? `<div class="auth-note">กำลังส่งข้อความทดสอบ...</div>` : `
+    <div class="auth-note"><b>ผลการส่ง</b><br>${escapeHtml(st.verdict).replace(/\n/g,'<br>')}</div>`);
+  // นับผู้รับต่อบทบาทจากข้อมูลชุดเดียวกับที่ใช้ส่งจริง (lineRecipientsForRole) จะได้ไม่เพี้ยนจากของจริง
+  const recipientRows = notifyRoles.map(r => {
+    const n = lineRecipientsForRole(r).length;
+    return `<tr><td>${ROLES[r].label}</td><td>${n ? n + ' คน' : '<span style="color:var(--danger)">0 — ไม่มีใครได้รับ</span>'}</td></tr>`;
+  }).join('');
+  const log = state.lineSendLog || [];
+  const sendLogBox = !log.length
+    ? `<p class="desc">ยังไม่มีการส่งในรอบนี้</p>`
+    : `<table class="mini"><tr><th>เวลา</th><th>รายการ</th><th>ผล</th></tr>${log.map(e => {
+        const t = new Date(e.at).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        const mark = e.ok === true ? `✅ ส่ง ${e.sent} ข้อความ` : (e.ok === null ? '⚠️ ไม่ทราบผล' : '❌ ไม่ถึงใคร');
+        return `<tr><td class="mono">${t}</td><td>${escapeHtml(e.label || '-')}</td><td>${mark}${e.note ? `<br><span style="color:var(--slate); font-size:11.5px;">${escapeHtml(e.note)}</span>` : ''}</td></tr>`;
+      }).join('')}</table>`;
   const lt = state.ui.lineTest;
   const lineTestBox = !lt ? '' : (lt.running ? `<div class="auth-note">กำลังทดสอบ relay...</div>` : `
     <div class="auth-note">
@@ -2623,6 +2752,22 @@ function renderSettings(){
       <button class="btn btn-outline btn-sm" onclick="runLineRelayTest()">ทดสอบ relay ตอนนี้</button>
     </div>
     ${lineTestBox}
+
+    <h3 style="margin-top:20px;">ส่งข้อความทดสอบจริง</h3>
+    <p class="desc">เดินเส้นทางเดียวกับการแจ้งเตือนจริงทุกขั้น แล้วบอกว่าส่งถึงกี่คน — ใช้ยืนยันว่าระบบพร้อมใช้งานก่อนเริ่มงานจริง</p>
+    <div class="inline-form">
+      <select class="input" onchange="state.ui.testSendRole=this.value">${sendTestRoleOpts}</select>
+      <button class="btn btn-outline btn-sm" onclick="runLineSendTest()">ส่งข้อความทดสอบ</button>
+    </div>
+    ${sendTestBox}
+
+    <h3 style="margin-top:20px;">ผู้รับแจ้งเตือนที่แอปหาเจอตอนนี้</h3>
+    <p class="desc">ตัวเลขนี้คือจำนวน LINE ที่จะได้รับแจ้งเตือนของแต่ละบทบาท — ถ้าเป็น 0 แปลว่าบทบาทนั้นจะไม่มีใครได้รับเลย ให้ผูก LINE ให้ผู้ใช้ในหัวข้อ <b>คำขอสิทธิ์เข้าใช้งาน</b> ด้านบน หรือเพิ่มแถวในแท็บ <b>แจ้งเตือน LINE - ผู้รับ</b> ของชีต</p>
+    <table class="mini"><tr><th>บทบาท</th><th>จำนวนผู้รับ</th></tr>${recipientRows}</table>
+
+    <h3 style="margin-top:20px;">บันทึกการส่ง LINE ล่าสุด</h3>
+    <p class="desc">เก็บเฉพาะในเครื่องนี้และเฉพาะรอบที่เปิดแอปอยู่ — ใช้ดูว่าที่กดไปเมื่อครู่ ข้อความออกไปถึงกี่คน</p>
+    ${sendLogBox}
   </div>
 
   <div class="settings-section card">

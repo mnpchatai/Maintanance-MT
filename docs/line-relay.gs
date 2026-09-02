@@ -100,7 +100,12 @@ function doPost(e){
 function doGet(e){
   var key = (e && e.parameter && e.parameter.key) || '';
   if(key === 'selftest') return json_(selfTest_());
-  return json_({ ok:true, service:'LineOA MT relay', hint:'ใช้ ?key=selftest เพื่อตรวจการตั้งค่า' });
+  // ซิงก์แท็บ LINE Users + แท็บผู้รับ เข้า KV ให้แอปอ่านได้ทันทีหลังแก้แถวในชีต
+  if(key === 'sync'){
+    try{ syncRecipientsNow(); return json_({ ok:true, synced:['lineUsers','lineRecipients'] }); }
+    catch(err){ return json_({ ok:false, error:String(err) }); }
+  }
+  return json_({ ok:true, service:'LineOA MT relay', hint:'ใช้ ?key=selftest เพื่อตรวจการตั้งค่า, ?key=sync เพื่อซิงก์รายชื่อผู้รับเข้าแอป' });
 }
 
 function selfTest_(){
@@ -122,6 +127,19 @@ function selfTest_(){
     r.checks.usersSheet = sh
       ? { ok:true, rows: Math.max(0, sh.getLastRow() - 1) }
       : { ok:false, error:'ยังไม่มีแท็บ "' + USERS_SHEET + '"', fix:'จะถูกสร้างอัตโนมัติเมื่อมีคนทักเข้ามาครั้งแรก' };
+
+    // แถวผู้รับ = ปลายทางจริงของการแจ้งเตือน ไม่มีสักแถว (และไม่มีใครผูก LINE ในแอป) = ไม่มีอะไรถูกส่ง
+    var rc = ss.getSheetByName(RECIPIENTS_SHEET);
+    var rcRows = rc ? Math.max(0, rc.getLastRow() - 1) : 0;
+    r.checks.recipientsSheet = rc
+      ? { ok: rcRows > 0, rows: rcRows,
+          fix: rcRows ? '' : 'ยังไม่มีแถวผู้รับสักแถว — เพิ่มแถว (บทบาท, userId) ในแท็บนี้ หรือผูก LINE ให้ผู้ใช้ในหน้าคำขอสิทธิ์ของแอป' }
+      : { ok:false, rows:0, error:'ยังไม่มีแท็บ "' + RECIPIENTS_SHEET + '"',
+          fix:'สร้างแท็บนี้แล้วใส่หัวตาราง บทบาท | userId | ชื่อ (จะใช้ร่วมกับการผูก LINE ในแอป)' };
+
+    // ซิงก์เข้า KV ทุกครั้งที่กดทดสอบ เพื่อให้แอปเห็นแถวที่เพิ่งแก้ในชีตโดยไม่ต้องทำอะไรเพิ่ม
+    try{ mirrorRecipientsToKv_(); r.checks.kvMirror = { ok:true }; }
+    catch(err){ r.checks.kvMirror = { ok:false, error:String(err) }; }
   }
 
   // ตรวจ token ด้วย endpoint ที่ไม่ต้องใช้ userId
@@ -202,8 +220,8 @@ function handleLineEvent_(ev){
   }
 
   // ให้หน้าตั้งค่าในแอปเห็นรายชื่อเองโดยไม่ต้องก๊อปมือ
-  try{ mirrorUsersToKv_(); }
-  catch(err){ log_('kv', 'mirror lineUsers ไม่สำเร็จ: ' + err); }
+  try{ mirrorUsersToKv_(); mirrorRecipientsToKv_(); }
+  catch(err){ log_('kv', 'mirror lineUsers/lineRecipients ไม่สำเร็จ: ' + err); }
 
   return !!row;
 }
@@ -341,7 +359,7 @@ function backfillFollowers(){
     Utilities.sleep(200);
   }
 
-  try{ mirrorUsersToKv_(); }
+  try{ mirrorUsersToKv_(); mirrorRecipientsToKv_(); }
   catch(err){ log_('backfillFollowers', 'mirror ไม่สำเร็จ: ' + err); }
 
   var msg = 'ตรวจเพื่อน ' + scanned + ' คน · เพิ่มใหม่ ' + added + ' คน · มีอยู่เดิม ' + before + ' คน (ไม่แตะ)';
@@ -375,7 +393,7 @@ function backfillDisplayNames(){
     }
     Utilities.sleep(200);  // กันยิง LINE profile API ถี่เกินจนโดน rate limit
   }
-  try{ mirrorUsersToKv_(); }catch(err){ log_('backfill', 'mirror ไม่สำเร็จ: ' + err); }
+  try{ mirrorUsersToKv_(); mirrorRecipientsToKv_(); }catch(err){ log_('backfill', 'mirror ไม่สำเร็จ: ' + err); }
   var msg = 'เติมชื่อสำเร็จ ' + filled + ' รายการ, ไม่สำเร็จ ' + failed + ' รายการ';
   log_('backfill', msg);
   console.log(msg);
@@ -390,8 +408,7 @@ function backfillDisplayNames(){
 function mirrorUsersToKv_(){
   var ss = SpreadsheetApp.openById(spreadsheetId_());
   var users = ss.getSheetByName(USERS_SHEET);
-  var kv = ss.getSheetByName(KV_SHEET);
-  if(!users || !kv || users.getLastRow() < 2) return;
+  if(!users || users.getLastRow() < 2) return;
 
   var rows = users.getRange(2, 1, users.getLastRow() - 1, 3).getValues();
   var list = [];
@@ -405,19 +422,57 @@ function mirrorUsersToKv_(){
     });
   }
   if(!list.length) return;
+  kvSet_(ss, 'lineUsers', JSON.stringify(list));
+}
 
-  var value = JSON.stringify(list);
+/**
+ * คัดลอกแท็บ "แจ้งเตือน LINE - ผู้รับ" ไปไว้ที่ KV key "lineRecipients"
+ *
+ * ทำไมต้องมี: index.html อ่านคีย์นี้เข้า state.lineRecipients แล้วรวมเข้าไปใน userIds ที่ส่งมาให้
+ * relay — แต่ก่อนหน้านี้ไม่มีใครเขียนคีย์นี้เลยสักที่ ค่าที่อ่านได้จึงเป็น null ตลอด
+ * ผลคือคนที่มีแต่แถวในชีตนี้ (ไม่ได้ผูก LINE ผ่านคำขอสิทธิ์ในแอป) ถูกตัดออกจากผู้รับทันทีที่แอป
+ * หา userId จากแหล่งอื่นเจอสักคน เพราะ handleNotifyRequest_ เดิมจะข้ามการอ่านชีตทั้งหมด
+ * เมื่อ userIds ที่ส่งมาไม่ว่าง — นี่คือต้นเหตุ "ตั้งค่าผู้รับในชีตไว้แล้วแต่ไม่ได้รับแจ้งเตือน"
+ */
+function mirrorRecipientsToKv_(){
+  var ss = SpreadsheetApp.openById(spreadsheetId_());
+  var sh = ss.getSheetByName(RECIPIENTS_SHEET);
+  if(!sh || sh.getLastRow() < 2) return;
+
+  var width = Math.min(3, Math.max(2, sh.getLastColumn()));
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
+  var list = [];
+  for(var i = 0; i < rows.length; i++){
+    var role = String(rows[i][0] || '').trim();
+    var id   = String(rows[i][1] || '').trim();
+    if(!role || !id) continue;
+    list.push({ role: role, userId: id, name: String((rows[i][2] || '')).trim() });
+  }
+  kvSet_(ss, 'lineRecipients', JSON.stringify(list));
+}
+
+/** เขียนค่าลงแท็บ KV แบบ upsert (ใช้ร่วมกันทั้ง lineUsers และ lineRecipients) */
+function kvSet_(ss, key, value){
+  var kv = ss.getSheetByName(KV_SHEET);
+  if(!kv) return false;
   var last = kv.getLastRow();
   if(last >= 1){
     var keys = kv.getRange(1, 1, last, 1).getValues();
     for(var j = 0; j < keys.length; j++){
-      if(String(keys[j][0]).trim() === 'lineUsers'){
+      if(String(keys[j][0]).trim() === key){
         kv.getRange(j + 1, 2).setValue(value);
-        return;
+        return true;
       }
     }
   }
-  kv.appendRow(['lineUsers', value]);
+  kv.appendRow([key, value]);
+  return true;
+}
+
+/** รันจากปุ่ม Run ในเอดิเตอร์ได้เลย เมื่อเพิ่ง (หรือเพิ่ง) แก้แถวในแท็บผู้รับแล้วอยากให้แอปเห็นทันที */
+function syncRecipientsNow(){
+  mirrorUsersToKv_();
+  mirrorRecipientsToKv_();
 }
 
 /* ============================== OUTGOING PUSH ============================== */
@@ -425,12 +480,28 @@ function mirrorUsersToKv_(){
 function handleNotifyRequest_(body){
   var ids = [];
 
-  // แอปส่ง userIds มาให้ตรงๆ (มาจากหน้า "กำหนดบทบาทผู้ใช้ LINE ที่ทักเข้ามา")
+  // แอปส่ง userIds มาให้ตรงๆ (มาจากคำขอสิทธิ์ที่ผูก LINE ไว้ / lineUserRoles / lineRecipients)
   if(Array.isArray(body.userIds) && body.userIds.length){
     ids = body.userIds.filter(function(x){ return x && String(x).trim(); });
   }
   // ไม่มีก็ค่อยไปดูตารางผู้รับในชีต
   if(!ids.length && body.role) ids = recipientsForRole_(body.role);
+  // body.alsoSheet = แอปสั่งให้ "รวม" แถวตามบทบาทในชีตเข้ากับ userIds ที่ส่งมาด้วย แทนที่จะข้าม
+  // ชีตทันทีที่ userIds ไม่ว่าง — เดิมคนที่มีแต่แถวในชีตจะถูกตัดทิ้งทั้งที่ตั้งค่าไว้ถูกต้องแล้ว
+  // (คีย์ KV "lineRecipients" ที่แอปใช้รวมเองไม่เคยมีใครเขียน ดู mirrorRecipientsToKv_)
+  else if(body.alsoSheet && body.role){
+    var extra = recipientsForRole_(body.role);
+    for(var k = 0; k < extra.length; k++){
+      if(ids.indexOf(extra[k]) === -1) ids.push(extra[k]);
+    }
+  }
+  // กันชื่อซ้ำ: คนเดียวกันอาจมาทั้งจาก userIds ของแอปและจากแถวในชีต จะได้ไม่โดนส่งซ้ำสองข้อความ
+  var seen = {}, uniq = [];
+  for(var u = 0; u < ids.length; u++){
+    var one = String(ids[u]).trim();
+    if(one && !seen[one]){ seen[one] = true; uniq.push(one); }
+  }
+  ids = uniq;
 
   // ไม่มีผู้รับ = ไม่ส่ง (ตั้งใจ — เดิม fallback เป็น broadcast หาเพื่อนทุกคนใน OA)
   if(!ids.length){
