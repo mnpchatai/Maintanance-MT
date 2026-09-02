@@ -195,6 +195,40 @@ Known trap: an `onfocus` handler that unconditionally calls `render()`
 creates infinite recursion once focus-restore calls `.focus()` on it
 (this happened with the machine-search box — fixed by only calling
 `render()` from `onfocus` when the dropdown isn't already showing).
+Photo attachments — two buttons, never one. The attach UI used to be a
+single `<input type="file" accept="image/*" multiple>` behind a label. On
+iOS that is fine: Safari answers it with an action sheet offering
+"Take Photo" alongside the library. On Android it is not — Chrome routes
+`accept="image/*" multiple` straight into the Android photo picker, which
+has no camera entry at all, so Android users could attach from the album
+but had no way to shoot a photo. It is now two separate inputs:
+`photoCameraInput` (`capture="environment"`, no `multiple`) which forces
+the camera intent, and `photoGalleryInput` (`multiple`, no `capture`) for
+the album — with the same pair, prefixed `resubmit`, inside the resubmit
+box. Do not merge them back into one input, and do not put `capture` on
+the gallery input (it would take the album away).
+Three smaller traps came with it, all of them Android-side:
+The inputs are hidden with `.photo-file-input` (offscreen clip), not
+`display:none`, and are opened by `openPhotoPicker()` calling `.click()`
+rather than by `label[for]` — some Android WebViews never forward the
+label's click to a `display:none` input.
+`looksLikeImage()` accepts a file with an empty `type`, falling back to
+the filename extension. Cameras on some Android builds hand back a file
+with no MIME type at all, and the old `f.type.startsWith('image/')` guard
+dropped exactly those — the freshly-taken photo vanished with no error.
+`takeFilesFromInput()` clears `input.value` right after reading the
+FileList, so shooting a second photo (same filename, `image.jpg`) still
+fires `change`.
+In-app camera fallback (`openInAppCamera`/`shootInAppCamera`) is the last
+resort for the case none of the above can fix: LINE's in-app browser on
+Android often does not implement the camera intent at all, so the capture
+input opens the file manager instead of the camera. The fallback link
+under the buttons opens a `getUserMedia` preview and draws the frame onto
+a canvas, bypassing the system file chooser entirely. Its markup lives
+outside `#app` (next to `#toastWrap`) on purpose — `render()` overwrites
+`app.innerHTML` wholesale, which would tear out a live `<video>` mid-shot.
+It needs HTTPS, which GitHub Pages gives us; on a browser that refuses
+`getUserMedia` it says so and points the user at Chrome.
 Polling: `pollForUpdates()` runs every 7s via `setInterval`, re-fetches
 `config`/`orders`/`notifications`, and only calls `render()` if something
 actually changed (JSON-string diff) — this is how edits made directly in

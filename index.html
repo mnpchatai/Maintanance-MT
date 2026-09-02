@@ -114,6 +114,47 @@
     border:2px dashed var(--line); border-radius:9px; padding:18px; text-align:center; cursor:pointer; color:var(--slate); font-size:13.5px;
   }
   .photo-drop:hover{border-color:var(--amber-dark); color:var(--amber-dark);}
+  .photo-actions{display:flex; gap:8px; flex-wrap:wrap;}
+  .photo-actions .photo-drop{
+    flex:1 1 140px; margin:0; padding:16px 10px; background:none;
+    font-family:'Sarabun',sans-serif; font-weight:600; line-height:1.4; -webkit-tap-highlight-color:transparent;
+  }
+  .photo-actions .photo-drop small{display:block; font-weight:400; font-size:11.5px; opacity:.75; margin-top:2px;}
+  /* ซ่อน input file แบบไม่ใช้ display:none — เบราว์เซอร์ Android บางตัวไม่ยอมเปิดกล้อง
+     ให้กับ input ที่ถูก display:none เอาไว้ */
+  .photo-file-input{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0 0 0 0); border:0; opacity:0;
+  }
+  .photo-fallback{
+    margin-top:7px; text-align:center; font-size:12px; color:var(--slate);
+  }
+  .photo-fallback button{
+    background:none; border:none; padding:0; color:var(--navy); font-family:'Sarabun',sans-serif;
+    font-size:12px; text-decoration:underline; cursor:pointer;
+  }
+  /* กล้องในแอป (สำรอง) — วางไว้นอก #app เพราะ render() เขียนทับ innerHTML ทั้งก้อนทุกครั้ง
+     ถ้าอยู่ข้างในวิดีโอจะถูกลบทิ้งกลางคัน */
+  .cam-overlay{
+    display:none; position:fixed; inset:0; z-index:9000; background:#000;
+    flex-direction:column; align-items:center; justify-content:center;
+  }
+  .cam-overlay.open{display:flex;}
+  .cam-overlay video{max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain;}
+  .cam-bar{
+    position:absolute; left:0; right:0; bottom:0; padding:18px 16px calc(18px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background:linear-gradient(transparent, rgba(0,0,0,.65));
+  }
+  .cam-bar button{
+    background:rgba(255,255,255,.15); color:#fff; border:1px solid rgba(255,255,255,.5);
+    border-radius:8px; padding:10px 16px; font-family:'Sarabun',sans-serif; font-size:14px; cursor:pointer;
+  }
+  .cam-shutter{
+    width:64px; height:64px; border-radius:50% !important; background:#fff !important; border:4px solid rgba(255,255,255,.55) !important;
+    padding:0 !important; font-size:24px !important; line-height:1; flex:0 0 auto;
+  }
+  .cam-hint{position:absolute; top:0; left:0; right:0; padding:14px 16px calc(14px + env(safe-area-inset-top)); color:#fff; font-size:12.5px; text-align:center; background:linear-gradient(rgba(0,0,0,.6), transparent);}
   .photo-thumbs{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;}
   .photo-thumb{position:relative; width:74px; height:74px; border-radius:7px; overflow:hidden; border:1px solid var(--line);}
   .photo-thumb img{width:100%; height:100%; object-fit:cover;}
@@ -241,6 +282,15 @@
 <body>
 <div id="app">กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…</div>
 <div class="toast-wrap" id="toastWrap"></div>
+<div class="cam-overlay" id="camOverlay">
+  <div class="cam-hint">กล้องในแอป — จัดภาพให้ชัดแล้วกดปุ่มขาวเพื่อถ่าย</div>
+  <video id="camVideo" playsinline autoplay muted></video>
+  <div class="cam-bar">
+    <button type="button" onclick="closeInAppCamera()">ยกเลิก</button>
+    <button type="button" class="cam-shutter" id="camShutter" onclick="shootInAppCamera()" aria-label="ถ่ายภาพ"></button>
+    <button type="button" onclick="flipInAppCamera()">สลับกล้อง</button>
+  </div>
+</div>
 
 <script>
 /* ============================= CONFIG / CONSTANTS ============================= */
@@ -362,7 +412,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-08-31.1';
+const APP_VERSION = '2026-09-02.1';
 
 async function storeGet(key){
   try{
@@ -1113,17 +1163,120 @@ function resizeImageFile(file, maxW){
     reader.readAsDataURL(file);
   });
 }
-async function handlePhotoInput(files){
+// เปิดกล้อง/อัลบั้มด้วยการ .click() ที่ตัว input โดยตรง แทนการพึ่ง label[for]
+// เพราะ WebView/เบราว์เซอร์ใน Android บางตัวไม่ส่ง click ต่อไปยัง input ที่ถูกซ่อนไว้
+function openPhotoPicker(inputId){
+  const el = document.getElementById(inputId);
+  if(!el){ toast('เปิดกล้องไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true); return; }
+  el.click();
+}
+// อ่านไฟล์ออกมาก่อนแล้วล้างค่า input ทันที เพื่อให้ถ่ายรูปเดิมซ้ำ (ชื่อไฟล์เดิม)
+// แล้ว event change ยังทำงานอยู่
+function takeFilesFromInput(input){
+  const files = Array.from((input && input.files) || []);
+  if(input) input.value = '';
+  return files;
+}
+// กล้องบน Android บางรุ่นส่งไฟล์กลับมาโดยไม่มี MIME type — ถ้ากรองด้วย
+// type.startsWith('image/') ตรงๆ รูปที่เพิ่งถ่ายจะถูกทิ้งเงียบๆ จึงยอมให้ไฟล์ที่ไม่มี
+// type ผ่านเข้าไปลองถอดรหัสดูก่อน แล้วค่อยตกที่ catch ถ้าไม่ใช่รูปจริง
+function looksLikeImage(file){
+  if(!file) return false;
+  if(file.type) return file.type.startsWith('image/');
+  return /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(file.name || '');
+}
+async function collectPhotos(files, remaining){
+  const out = [];
+  let failed = 0;
+  for(const f of files.slice(0, remaining)){
+    if(!looksLikeImage(f)){ failed++; continue; }
+    try{
+      out.push(await resizeImageFile(f, 900));
+    }catch(e){ console.error(e); failed++; }
+  }
+  if(failed) toast('มีรูปที่เปิดไม่สำเร็จ ' + failed + ' รูป กรุณาลองถ่ายหรือเลือกใหม่อีกครั้ง', true);
+  return out;
+}
+/* กล้องสำรองในแอป — ใช้เมื่อปุ่ม "ถ่ายภาพ" (input capture) เปิดกล้องไม่ขึ้น ซึ่งเจอบ่อยบน
+   Android ที่เปิดลิงก์ในเบราว์เซอร์ในแอป LINE: WebView ตัวนั้นไม่ยิง intent กล้องให้
+   (เลือกจากอัลบั้มยังได้ปกติ) ต่างจาก iOS ที่เด้ง action sheet ให้เลือกถ่ายรูปได้เอง
+   ตัวนี้ใช้ getUserMedia วาดเฟรมลง canvas ตรงๆ จึงไม่ต้องพึ่ง file chooser ของระบบเลย */
+let camStream = null;      // MediaStream ที่เปิดค้างอยู่ (ต้องปิดทุก track ตอนออก ไม่งั้นไฟกล้องค้าง)
+let camTarget = null;      // 'form' | 'resubmit' — ถ่ายเสร็จแล้วรูปจะไปเข้า array ไหน
+let camFacing = 'environment';
+function photoBucket(target){
+  return target === 'resubmit' ? state.ui.resubmitPhotos : state.form.photos;
+}
+function photoBucketFull(target){
+  if(photoBucket(target).length < 5) return false;
+  toast(target === 'resubmit' ? 'แนบรูปได้สูงสุด 5 รูปต่อครั้ง' : 'แนบรูปได้สูงสุด 5 รูปต่อใบแจ้งซ่อม', true);
+  return true;
+}
+function inAppCameraSupported(){
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false);
+}
+async function startCamStream(){
+  const video = document.getElementById('camVideo');
+  if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  camStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal: camFacing } }, audio:false });
+  video.srcObject = camStream;
+  try{ await video.play(); }catch(e){ /* บาง WebView เล่นเองอยู่แล้ว */ }
+}
+async function openInAppCamera(target){
+  if(photoBucketFull(target)) return;
+  if(!inAppCameraSupported()){
+    toast('เบราว์เซอร์นี้ไม่รองรับกล้องในแอป กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
+    return;
+  }
+  camTarget = target;
+  camFacing = 'environment';
+  try{
+    await startCamStream();
+  }catch(e){
+    console.error(e);
+    const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+    toast(denied
+      ? 'ไม่ได้รับอนุญาตให้ใช้กล้อง กรุณาอนุญาตกล้องให้เบราว์เซอร์ หรือเปิดลิงก์ใน Chrome'
+      : 'เปิดกล้องไม่สำเร็จ กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
+    closeInAppCamera();
+    return;
+  }
+  document.getElementById('camOverlay').classList.add('open');
+}
+async function flipInAppCamera(){
+  camFacing = camFacing === 'environment' ? 'user' : 'environment';
+  try{ await startCamStream(); }
+  catch(e){ console.error(e); toast('สลับกล้องไม่สำเร็จ', true); }
+}
+function closeInAppCamera(){
+  if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  const video = document.getElementById('camVideo');
+  if(video) video.srcObject = null;
+  document.getElementById('camOverlay').classList.remove('open');
+  camTarget = null;
+}
+function shootInAppCamera(){
+  const video = document.getElementById('camVideo');
+  const target = camTarget;
+  const w0 = video.videoWidth, h0 = video.videoHeight;
+  if(!w0 || !h0){ toast('กล้องยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่', true); return; }
+  if(photoBucketFull(target)){ closeInAppCamera(); return; }
+  const scale = Math.min(1, 900 / w0);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(w0 * scale); canvas.height = Math.round(h0 * scale);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  photoBucket(target).push(canvas.toDataURL('image/jpeg', 0.6));
+  closeInAppCamera();
+  toast('เพิ่มรูปแล้ว');
+  render();
+}
+async function handlePhotoInput(input){
+  const files = takeFilesFromInput(input);
+  if(!files.length) return;
   const remaining = 5 - state.form.photos.length;
   if(remaining <= 0){ toast('แนบรูปได้สูงสุด 5 รูปต่อใบแจ้งซ่อม', true); return; }
-  const list = Array.from(files).slice(0, remaining);
-  for(const f of list){
-    if(!f.type.startsWith('image/')) continue;
-    try{
-      const dataUrl = await resizeImageFile(f, 900);
-      state.form.photos.push(dataUrl);
-    }catch(e){ console.error(e); }
-  }
+  const added = await collectPhotos(files, remaining);
+  state.form.photos.push(...added);
   render();
 }
 
@@ -1251,17 +1404,13 @@ function closeActionBox(){
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
   render();
 }
-async function handleResubmitPhotoInput(files){
+async function handleResubmitPhotoInput(input){
+  const files = takeFilesFromInput(input);
+  if(!files.length) return;
   const remaining = 5 - state.ui.resubmitPhotos.length;
   if(remaining <= 0){ toast('แนบรูปได้สูงสุด 5 รูปต่อครั้ง', true); return; }
-  const list = Array.from(files).slice(0, remaining);
-  for(const f of list){
-    if(!f.type.startsWith('image/')) continue;
-    try{
-      const dataUrl = await resizeImageFile(f, 900);
-      state.ui.resubmitPhotos.push(dataUrl);
-    }catch(e){ console.error(e); }
-  }
+  const added = await collectPhotos(files, remaining);
+  state.ui.resubmitPhotos.push(...added);
   render();
 }
 function removeResubmitPhoto(idx){
@@ -1685,8 +1834,13 @@ function renderNew(){
 
     <div class="field">
       <label class="field-label">แนบรูปภาพประกอบ (สูงสุด 5 รูป)</label>
-      <label class="photo-drop" for="photoInput">📷 แตะเพื่อเลือกรูปภาพ หรือถ่ายภาพใหม่</label>
-      <input id="photoInput" type="file" accept="image/*" multiple style="display:none" onchange="handlePhotoInput(this.files)">
+      <div class="photo-actions">
+        <button type="button" class="photo-drop" onclick="openPhotoPicker('photoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
+        <button type="button" class="photo-drop" onclick="openPhotoPicker('photoGalleryInput')">🖼️ เลือกจากอัลบั้ม<small>เลือกได้หลายรูป</small></button>
+      </div>
+      <input id="photoCameraInput" class="photo-file-input" type="file" accept="image/*" capture="environment" onchange="handlePhotoInput(this)">
+      <input id="photoGalleryInput" class="photo-file-input" type="file" accept="image/*" multiple onchange="handlePhotoInput(this)">
+      <div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('form')">ใช้กล้องในแอป</button></div>
       <div class="photo-thumbs">${photoThumbs}</div>
     </div>
 
@@ -1782,8 +1936,13 @@ function renderDetail(){
     const photoSection = actionType === 'resubmit' ? `
       <div class="field" style="margin-top:10px; margin-bottom:0;">
         <label class="field-label">แนบรูปภาพประกอบเพิ่มเติม (สูงสุด 5 รูป)</label>
-        <label class="photo-drop" for="resubmitPhotoInput">📷 แตะเพื่อเลือกรูปภาพ หรือถ่ายภาพใหม่</label>
-        <input id="resubmitPhotoInput" type="file" accept="image/*" multiple style="display:none" onchange="handleResubmitPhotoInput(this.files)">
+        <div class="photo-actions">
+          <button type="button" class="photo-drop" onclick="openPhotoPicker('resubmitPhotoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
+          <button type="button" class="photo-drop" onclick="openPhotoPicker('resubmitPhotoGalleryInput')">🖼️ เลือกจากอัลบั้ม<small>เลือกได้หลายรูป</small></button>
+        </div>
+        <input id="resubmitPhotoCameraInput" class="photo-file-input" type="file" accept="image/*" capture="environment" onchange="handleResubmitPhotoInput(this)">
+        <input id="resubmitPhotoGalleryInput" class="photo-file-input" type="file" accept="image/*" multiple onchange="handleResubmitPhotoInput(this)">
+        <div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('resubmit')">ใช้กล้องในแอป</button></div>
         <div class="photo-thumbs">${photoThumbs}</div>
       </div>` : '';
     return `
