@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Camera Capture</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+    button { padding: 12px 20px; font-size: 16px; margin: 10px 0; width: 100%; cursor: pointer; }
+    .test { border: 1px solid #ccc; padding: 15px; margin: 20px 0; background: #f9f9f9; }
+    .result { margin-top: 10px; padding: 10px; border-radius: 4px; }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+  <h1>🔍 ทดสอบกล้อง Android</h1>
+
+  <div class="test">
+    <h2>1. Test capture="environment" (ค่าเดิม)</h2>
+    <input id="test1" type="file" accept="image/*" capture="environment">
+    <button onclick="testCapture('test1')">กดแล้วลองถ่าย</button>
+    <div id="result1" class="result"></div>
+  </div>
+
+  <div class="test">
+    <h2>2. Test capture (ไม่ระบุ facing mode)</h2>
+    <input id="test2" type="file" accept="image/*" capture>
+    <button onclick="testCapture('test2')">กดแล้วลองถ่าย</button>
+    <div id="result2" class="result"></div>
+  </div>
+
+  <div class="test">
+    <h2>3. Test accept="image/*" (ไม่มี capture)</h2>
+    <input id="test3" type="file" accept="image/*">
+    <button onclick="testCapture('test3')">กดแล้วเลือกหรือถ่าย</button>
+    <div id="result3" class="result"></div>
+  </div>
+
+  <div class="test">
+    <h2>4. Test getUserMedia (gereative API)</h2>
+    <button onclick="testGetUserMedia()">เปิดกล้องผ่าน getUserMedia</button>
+    <div id="result4" class="result"></div>
+    <video id="preview" style="max-width: 100%; margin-top: 10px; border: 1px solid #ccc;"></video>
+    <button id="closeBtn" style="display:none; background: red; color: white;" onclick="closeGetUserMedia()">ปิดกล้อง</button>
+  </div>
+
+  <div class="test">
+    <h2>📋 ข้อมูลระบบ</h2>
+    <pre id="sysinfo"></pre>
+  </div>
+
+  <script>
+    function testCapture(inputId){
+      const inp = document.getElementById(inputId);
+      const resultId = 'result' + inputId.slice(-1);
+
+      inp.onchange = function(){
+        if(this.files.length > 0){
+          const file = this.files[0];
+          document.getElementById(resultId).innerHTML =
+            `<div class="result success">✅ ได้ไฟล์! ${file.name} (${file.type || 'ไม่มี MIME type'})</div>`;
+        }
+      };
+
+      inp.click();
+    }
+
+    let stream = null;
+    async function testGetUserMedia(){
+      try {
+        const media = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        stream = media;
+        const video = document.getElementById('preview');
+        video.srcObject = stream;
+        video.play();
+        document.getElementById('result4').innerHTML =
+          `<div class="result success">✅ getUserMedia ได้! กล้องเปิดอยู่</div>`;
+        document.getElementById('closeBtn').style.display = 'block';
+      } catch(e) {
+        document.getElementById('result4').innerHTML =
+          `<div class="result error">❌ Error: ${e.name} - ${e.message}</div>`;
+      }
+    }
+
+    function closeGetUserMedia(){
+      if(stream) stream.getTracks().forEach(t => t.stop());
+      document.getElementById('preview').srcObject = null;
+      document.getElementById('closeBtn').style.display = 'none';
+      document.getElementById('result4').innerHTML = '<div class="result success">✅ ปิดแล้ว</div>';
+    }
+
+    // System info
+    window.addEventListener('DOMContentLoaded', function(){
+      const ua = navigator.userAgent;
+      const info = `
+User Agent: ${ua}
+Android: ${/Android/i.test(ua) ? '✓ ใช่' : '✗ ไม่ใช่'}
+Chrome: ${/Chrome|Chromium/i.test(ua) ? '✓ ใช่' : '✗ ไม่ใช่'}
+In-app browser: ${/Line\/|FBAN|FB_IAB|Instagram|MicroMessenger|wv/i.test(ua) ? '✓ ใช่' : '✗ ไม่ใช่'}
+Secure context (HTTPS): ${window.location.protocol === 'https:' ? '✓ ใช่' : '✗ ไม่ใช่'}
+mediaDevices: ${navigator.mediaDevices ? '✓ มี' : '✗ ไม่มี'}
+getUserMedia: ${navigator.mediaDevices?.getUserMedia ? '✓ มี' : '✗ ไม่มี'}
+      `;
+      document.getElementById('sysinfo').textContent = info.trim();
+    });
+  </script>
+</body>
+</html>
