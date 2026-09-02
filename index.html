@@ -941,8 +941,18 @@ function toast(msg, isErr){
   wrap.appendChild(el);
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 2600);
 }
+/* เทียบชื่อคนแบบไม่สนช่องว่าง/ตัวพิมพ์/รูปแบบ Unicode — ชื่อเดียวกันที่พิมพ์คนละที่ (ชีตผู้รับ,
+   คำขอสิทธิ์, ชื่อช่างใน config) มักต่างกันแค่เว้นวรรคซ้ำ, nbsp หรืออักขระความกว้างศูนย์ */
+function normPersonName(t){
+  return String(t == null ? '' : t).normalize('NFC').replace(/[\s\u00a0\u200b-\u200d\ufeff]/g, '').toLowerCase();
+}
+function samePersonName(a, b){
+  const x = normPersonName(a), y = normPersonName(b);
+  return !!x && x === y;
+}
 /* หา LINE userId ของผู้รับสำหรับบทบาทหนึ่งๆ จากตารางที่ admin กำหนดไว้ในหน้าตั้งค่า
-   รองรับทั้งบทบาทของระบบ (fm/gm/maint/tech/requester/admin) และ "ชื่อช่าง" ที่ใช้ยิงปิงส่วนตัว */
+   ใช้กับบทบาทที่ "ทั้งกลุ่มต้องรู้" เท่านั้น (fm / gm / maint / admin)
+   ห้ามใช้กับ 'requester' หรือ 'tech' — สองอันนั้นต้องเจาะจงคนผ่าน lineIdsForPerson() */
 function lineRecipientsForRole(role){
   const map = state.lineUserRoles || {};
   const matches = m => ((m.roles || []).includes(role) || (m.techName && m.techName === role));
@@ -961,6 +971,42 @@ function lineRecipientsForRole(role){
   });
   return ids;
 }
+/* ผู้รับแบบ "เจาะจงคนเดียว" — ใช้กับผู้แจ้งซ่อมของใบนั้น และช่างที่ถูกมอบหมายงานนั้น
+   คืน LINE userId เท่าที่หาเจอ (ว่างได้ = ไม่ส่ง) โดยไล่จากตัวระบุที่แม่นที่สุดไปหาที่หยาบที่สุด
+   และ "หยุดทันทีที่เจอ" เพื่อไม่ให้ชื่อซ้ำกับคนอื่นลากคนที่ไม่เกี่ยวข้องเข้ามาด้วย
+   สำคัญ: ห้ามตกไปใช้บทบาททั้งกลุ่มเป็น fallback เด็ดขาด — หาไม่เจอให้เงียบไปเลย ไม่ใช่ส่งหาทุกคน */
+function lineIdsForPerson({ lineUserId = '', didHash = '', techName = '', name = '' } = {}){
+  const out = [];
+  const add = v => { const id = String(v || '').trim(); if(id && !out.includes(id)) out.push(id); };
+  const reqs = state.accessRequests || [];
+  const roleMap = state.lineUserRoles || {};
+  const sheetRows = state.lineRecipients || [];
+
+  // 1) LINE ที่ผูกไว้กับใบนี้ตรงๆ ตั้งแต่ตอนสร้าง — แม่นที่สุด
+  add(lineUserId);
+  // 2) รหัสประจำเครื่องของคนที่กดสร้างใบ (ลายนิ้วมือ sha256 ในคำขอสิทธิ์)
+  if(!out.length && didHash){
+    const r = reqs.find(x => x.status === 'approved' && x.didHash === didHash && x.lineUserId);
+    if(r) add(r.lineUserId);
+  }
+  // 3) ชื่อช่าง — ตรงกับ "ชื่อช่าง" ที่ผูกไว้ในคำขอสิทธิ์ / lineUserRoles / คอลัมน์บทบาทในชีตผู้รับ
+  if(!out.length && techName){
+    reqs.forEach(r => { if(r.status === 'approved' && samePersonName(r.techName, techName)) add(r.lineUserId); });
+    Object.keys(roleMap).forEach(id => { if(samePersonName((roleMap[id] || {}).techName, techName)) add(id); });
+    sheetRows.forEach(r => { if(samePersonName(r.role, techName)) add(r.userId); });
+  }
+  // 4) ชื่อ-นามสกุล (ใบเก่าที่ยังไม่ได้เก็บตัวระบุตัวตนไว้ตอนสร้าง)
+  if(!out.length && name){
+    reqs.forEach(r => { if(r.status === 'approved' && samePersonName(r.name, name)) add(r.lineUserId); });
+    Object.keys(roleMap).forEach(id => { if(samePersonName((roleMap[id] || {}).name, name)) add(id); });
+    sheetRows.forEach(r => { if(samePersonName(r.name, name)) add(r.userId); });
+  }
+  return out;
+}
+/* ผู้แจ้งซ่อมของใบนี้คนเดียว ไม่ใช่ทุกคนที่มีบทบาท "ผู้แจ้งซ่อม" */
+function orderRequesterLineIds(o){
+  return lineIdsForPerson({ lineUserId: o.requesterLineUserId, didHash: o.requesterDidHash, name: o.requestedBy });
+}
 /* URL ปลายทางของ relay LINE: ใช้ค่าคงที่ LINE_RELAY_URL ก่อน แล้วจึงค่อยตกไปใช้ค่าที่ตั้งไว้ในชีต
    (จำเป็นตอนย้ายบัญชี — ค่าในชีตยังเป็น URL ของสคริปต์บัญชีเก่าซึ่งยิงไปก็ไม่มีอะไรเกิดขึ้น) */
 function lineRelayUrl(role){
@@ -968,13 +1014,21 @@ function lineRelayUrl(role){
   const hooks = state.config.lineWebhooks || {};
   return (role && hooks[role]) || Object.values(hooks).find(Boolean) || '';
 }
+/* ส่งถึง userId ที่ระบุมาเท่านั้น — payload ไม่มีฟิลด์ role ติดไปด้วยโดยตั้งใจ เพราะ relay จะ
+   ตกไปอ่านชีต "แจ้งเตือน LINE - ผู้รับ" ตาม role ทันทีที่ userIds ว่าง (ดู handleNotifyRequest_)
+   ซึ่งเป็นทางที่ทำให้แจ้งเตือนเฉพาะบุคคลกลายเป็นส่งหาทุกคนในบทบาทนั้นแทน */
 async function sendLineToUserIds(userIds, message){
-  if(!userIds || !userIds.length) return;
+  const ids = [...new Set((userIds || []).map(x => String(x || '').trim()).filter(Boolean))];
+  if(!ids.length) return;
   const url = lineRelayUrl();
   if(!url) return;
   try{
-    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ userIds, message, at: nowIso() }) });
+    await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ userIds: ids, message, at: nowIso() }) });
   }catch(e){ console.warn('LINE relay webhook not reachable (check URL / CORS):', e); }
+}
+/* ปิงช่างที่ได้รับมอบหมายงานใบนั้นเป็นรายคน ไม่ใช่ช่างทุกคนในระบบ */
+async function sendLineToTech(techName, message){
+  await sendLineToUserIds(lineIdsForPerson({ techName }), message);
 }
 async function tryLineWebhook(role, message){
   const url = lineRelayUrl(role);
@@ -996,15 +1050,46 @@ function accessRequestsDeepLink(){
 function orderDeepLink(orderId, role){
   return `${APP_URL}?order=${encodeURIComponent(orderId)}&role=${encodeURIComponent(role)}`;
 }
-async function pushNotification(toRole, orderId, docNumber, message){
+/* แจ้งเตือน "ทั้งบทบาท" — ใช้กับ fm / gm / maint เท่านั้น (ทุกคนในบทบาทนั้นต้องเห็นงานที่รอตัวเอง) */
+async function pushNotification(toRole, orderId, docNumber, message, target){
   const n = { id: uid(), toRole, orderId, docNumber, message, createdAt: nowIso(), read:false };
+  // target = แจ้งเตือนเจาะจงคน: ติดตัวระบุตัวตนไว้กับการแจ้งเตือนด้วย เพื่อให้กระดิ่งในแอป
+  // โชว์เฉพาะเจ้าของใบ ไม่ใช่ทุกคนที่มีบทบาทเดียวกัน
+  if(target){
+    n.toDidHash = target.didHash || '';
+    n.toName = target.name || '';
+  }
   state.notifications.unshift(n);
   await storeSet('notifications', state.notifications);
-  await tryLineWebhook(toRole, `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`);
+  const text = `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`;
+  if(target) await sendLineToUserIds(target.userIds, text);
+  else await tryLineWebhook(toRole, text);
+}
+/* แจ้งเตือนผู้แจ้งซ่อม "ของใบนี้" คนเดียว — หาคนไม่เจอก็ไม่ส่ง ดีกว่าส่งหาผู้แจ้งซ่อมทุกคน */
+async function notifyOrderRequester(o, message){
+  const userIds = orderRequesterLineIds(o);
+  // ไม่มี LINE ผูกไว้ = ได้แค่การแจ้งเตือนในแอป (กระดิ่ง) ซึ่งยังถึงเจ้าของใบอยู่ — ตั้งใจให้เงียบ
+  // ไม่ใช่ตกไปส่งหาผู้แจ้งซ่อมทุกคนแทน วิธีแก้คือ admin ผูก LINE ให้คนนั้นในหน้าคำขอสิทธิ์
+  if(!userIds.length) console.warn('ไม่มี LINE ของผู้แจ้งใบ ' + o.docNumber + ' (' + (o.requestedBy || '-') + ') — ส่งเฉพาะการแจ้งเตือนในแอป');
+  await pushNotification('requester', o.id, o.docNumber, message, {
+    userIds,
+    didHash: o.requesterDidHash || '',
+    name: o.requestedBy || '',
+  });
+}
+/* การแจ้งเตือนใบนี้เป็นของเรารึเปล่า (กระดิ่ง/หน้าการแจ้งเตือนในแอป)
+   admin เห็นทุกอัน ส่วนคนอื่นเห็นเฉพาะบทบาทตัวเอง และถ้าเป็นการแจ้งเตือนแบบเจาะจงคน
+   ต้องเป็นเราจริงๆ เท่านั้น (เทียบรหัสประจำเครื่องก่อน ไม่มีค่อยเทียบชื่อ) */
+function notifIsMine(n){
+  if(state.role === 'admin') return true;
+  if(n.toRole !== state.role) return false;
+  if(n.toDidHash) return n.toDidHash === state.didHash;
+  if(n.toName) return samePersonName(n.toName, state.myName);
+  return true;   // การแจ้งเตือนเก่าที่ยังไม่มีเจ้าของเจาะจง — คงพฤติกรรมเดิมไว้
 }
 function unreadCountForRole(role){
   if(role === 'admin') return state.notifications.filter(n => !n.read).length;
-  return state.notifications.filter(n => n.toRole === role && !n.read).length;
+  return state.notifications.filter(n => !n.read && notifIsMine(n)).length;
 }
 
 /* ============================= PHOTO HANDLING ============================= */
@@ -1088,6 +1173,10 @@ async function submitOrder(){
   const order = {
     id, docNumber, department: f.dept, docType: f.docType, machineCode: f.machineCode, machineName: f.machineName,
     cause: f.cause.trim(), neededDate: f.neededDate, requestedBy: f.requestedBy.trim(),
+    // ตัวตนของ "คนที่กดส่งใบนี้" — ใช้ยิงแจ้งเตือนกลับหาเจ้าของใบคนเดียว ไม่ใช่ผู้แจ้งซ่อมทุกคน
+    // (ช่องชื่อผู้แจ้งแก้เป็นชื่อคนอื่นได้ เช่นแจ้งแทนเพื่อน จึงเก็บทั้งรหัสเครื่องและ LINE ที่ผูกไว้)
+    requesterDidHash: state.didHash || '',
+    requesterLineUserId: (state.myRequest && state.myRequest.status === 'approved' && state.myRequest.lineUserId) || '',
     createdAt: nowIso(), status: 'PENDING_FM', photoCount: f.photos.length,
     approvals: { fm:{status:null,by:'',at:'',note:''}, gm:{status:null,by:'',at:'',note:''} },
     assignment: { technicians:[], assignedBy:'', assignedAt:'', startDate:'', endDate:'', executionPlan:'', receivedByName:'' },
@@ -1140,7 +1229,7 @@ async function openDetail(id){
   state.detailPhotos = photos || [];
   // mark related notifications read for current role (admin: all roles' notifications for this order)
   let changed = false;
-  state.notifications.forEach(n => { if(n.orderId === id && (state.role === 'admin' || n.toRole === state.role) && !n.read){ n.read = true; changed = true; } });
+  state.notifications.forEach(n => { if(n.orderId === id && !n.read && notifIsMine(n)){ n.read = true; changed = true; } });
   if(changed) await storeSet('notifications', state.notifications);
   render();
 }
@@ -1217,7 +1306,7 @@ async function rejectFm(id, note){
   o.status = 'REJECTED';
   o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการโรงงานไม่อนุมัติ: ' + reason });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการโรงงาน (${reason})`);
+  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการโรงงาน (${reason})`);
   toast('บันทึกการไม่อนุมัติแล้ว');
   closeActionBox();
 }
@@ -1227,7 +1316,7 @@ async function needInfoFm(id, note){
   o.status = 'NEEDS_INFO_FM';
   o.statusHistory.push({ status:'NEEDS_INFO_FM', at: nowIso(), note:'ผู้จัดการโรงงานขอข้อมูลเพิ่มเติม: ' + msg });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `ผู้จัดการโรงงานต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
+  await notifyOrderRequester(o, `ผู้จัดการโรงงานต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
 }
@@ -1249,7 +1338,7 @@ async function rejectGm(id, note){
   o.status = 'REJECTED';
   o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการทั่วไปไม่อนุมัติ: ' + reason });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการทั่วไป (${reason})`);
+  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการทั่วไป (${reason})`);
   toast('บันทึกการไม่อนุมัติแล้ว');
   closeActionBox();
 }
@@ -1259,7 +1348,7 @@ async function needInfoGm(id, note){
   o.status = 'NEEDS_INFO_GM';
   o.statusHistory.push({ status:'NEEDS_INFO_GM', at: nowIso(), note:'ผู้จัดการทั่วไปขอข้อมูลเพิ่มเติม: ' + msg });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `ผู้จัดการทั่วไปต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
+  await notifyOrderRequester(o, `ผู้จัดการทั่วไปต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
 }
@@ -1301,9 +1390,9 @@ async function assignTechnician(id){
   o.status = 'ASSIGNED';
   o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:`รับใบแจ้งซ่อมโดย ${receivedBy} — มอบหมายงานให้ ${techs.join(', ')} (กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}) — การดำเนินงาน: ${EXECUTION_PLAN_META[executionPlan]}` });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`);
+  await notifyOrderRequester(o, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`);
   for(const tech of techs){
-    await tryLineWebhook(tech, `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
+    await sendLineToTech(tech, `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
   }
   state.ui.assignTechs = [''];
   state.ui.assignStartDate = '';
@@ -1353,7 +1442,7 @@ async function startRepair(id){
   const techLabel = assignedTechs(o).join(', ') || 'ช่าง';
   o.statusHistory.push({ status:'IN_PROGRESS', at: nowIso(), note: techLabel + ' เริ่มดำเนินการซ่อม' });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านสถานะ: กำลังซ่อม`);
+  await notifyOrderRequester(o, `งานซ่อมของท่านสถานะ: กำลังซ่อม`);
   toast('อัปเดตสถานะ: กำลังซ่อม');
   render();
 }
@@ -1362,7 +1451,7 @@ async function finishRepair(id){
   o.status = 'PENDING_VERIFY';
   o.statusHistory.push({ status:'PENDING_VERIFY', at: nowIso(), note:'ซ่อมเสร็จสิ้น รอผู้แจ้งซ่อมตรวจสอบการใช้งาน' });
   await persistOrders();
-  await pushNotification('requester', id, o.docNumber, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`);
+  await notifyOrderRequester(o, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`);
   toast('อัปเดตสถานะ: รอผู้แจ้งตรวจสอบผลการซ่อม');
   render();
 }
@@ -1378,7 +1467,7 @@ async function verifyRepair(id, type, note){
     await persistOrders();
     await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`);
     for(const tech of assignedTechs(o)){
-      await tryLineWebhook(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
+      await sendLineToTech(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
     }
     toast('ยืนยันผลการซ่อมเรียบร้อย ปิดงาน');
   } else {
@@ -1391,7 +1480,7 @@ async function verifyRepair(id, type, note){
     const techs = assignedTechs(o);
     await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`);
     for(const tech of techs){
-      await tryLineWebhook(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
+      await sendLineToTech(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
     }
     toast('ส่งกลับเพื่อซ่อมเพิ่มเติมแล้ว');
   }
@@ -1918,13 +2007,13 @@ function renderDetail(){
 
 /* ============================= RENDER: NOTIFICATIONS ============================= */
 async function markAllRead(){
-  state.notifications.forEach(n => { if(state.role==='admin' || n.toRole===state.role) n.read = true; });
+  state.notifications.forEach(n => { if(notifIsMine(n)) n.read = true; });
   await storeSet('notifications', state.notifications);
   render();
 }
 function renderNotif(){
   // admin เห็นการแจ้งเตือนของทุกบทบาทรวมกัน (ตรงกับ "เข้าถึงทุกฟังก์ชัน")
-  const mine = state.role === 'admin' ? state.notifications : state.notifications.filter(n => n.toRole === state.role);
+  const mine = state.notifications.filter(notifIsMine);
   const items = mine.map(n => `
     <div class="notif-item ${n.read?'':'unread'}">
       <div class="notif-icon">🔔</div>
@@ -1965,19 +2054,15 @@ function renderAccessRequests(){
   // โชว์ควบ "ชื่อจริง (ชื่อไลน์)" เมื่อรู้ทั้งสองอย่าง — ชื่อจริงมาจากที่ admin พิมพ์เอง (คอลัมน์ชื่อใน
   // ชีตผู้รับ หรือ lineUserRoles เก่า) ส่วนชื่อไลน์คือชื่อโปรไฟล์ที่เจ้าตัวตั้งเอง (แท็บ LINE Users)
   // เดิมชื่อไลน์ทับชื่อจริงเสมอ ทำให้ดรอปดาวน์ขึ้นเป็นชื่อเล่น/อีโมจิจนผูกผิดคนได้ง่าย
-  // เทียบชื่อแบบไม่สนช่องว่าง/รูปแบบ Unicode: ชื่อเดียวกันที่พิมพ์คนละที่มักต่างกันแค่เว้นวรรคซ้ำ,
-  // nbsp หรืออักขระความกว้างศูนย์ ถ้าเทียบตรงๆ จะกลายเป็น "อุดม หนานคำ (อุดม หนานคำ)" ซ้ำสองรอบ
-  const sameName_ = (a, b) => {
-    const norm = t => String(t).normalize('NFC').replace(/[\s\u00a0\u200b-\u200d\ufeff]/g, '').toLowerCase();
-    return norm(a) === norm(b);
-  };
+  // เทียบชื่อด้วย samePersonName() (ไม่สนช่องว่าง/รูปแบบ Unicode) ไม่งั้นชื่อเดียวกันที่พิมพ์คนละที่
+  // จะกลายเป็น "อุดม หนานคำ (อุดม หนานคำ)" ซ้ำสองรอบ เพราะต่างกันแค่เว้นวรรคซ้ำหรืออักขระความกว้างศูนย์
   const lineLabelFor = (id) => {
     const known = state.lineUsers.find(u => u.userId === id) || {};
     const fromSheet = lineRecipientById[id];
     const lineName = String(known.displayName || '').trim();
     const realName = String((fromSheet && fromSheet.name)
       || (state.lineUserRoles[id] && state.lineUserRoles[id].name) || '').trim();
-    if(realName && lineName && !sameName_(realName, lineName)) return `${realName} (${lineName})`;
+    if(realName && lineName && !samePersonName(realName, lineName)) return `${realName} (${lineName})`;
     return realName || lineName || id;
   };
   const lineUserOptsFor = (cur) => {
@@ -2142,6 +2227,7 @@ function renderAccessRequests(){
       <a href="${SHEET_URL}" target="_blank" rel="noopener">เปิด Sheet →</a>
     </div>
     <p class="desc" style="margin:10px 0 0; font-size:12px;">คนที่ <b>รับแจ้งเตือนอย่างเดียว ไม่ได้ใช้แอป</b> (เช่น หัวหน้าที่ไม่เคยเปิดลิงก์) และ <b>ช่างที่ไม่ได้ใช้แอป</b> ยังผูกได้ที่แท็บ <b>แจ้งเตือน LINE - ผู้รับ</b> ในชีต (คอลัมน์ บทบาท = ชื่อบทบาทหรือชื่อช่างเป๊ะๆ, userId) ระบบรวมแถวพวกนั้นเป็นผู้รับด้วยเสมอ</p>
+    <p class="desc" style="margin:6px 0 0; font-size:12px;">⚠️ ใช้ได้เฉพาะบทบาทที่แจ้งทั้งกลุ่ม (<b>fm · gm · maint · admin</b>) และ <b>ชื่อช่าง</b> เท่านั้น — แถวที่ใส่บทบาทเป็น <b>requester</b> หรือ <b>tech</b> จะไม่ถูกใช้ เพราะการแจ้งเตือนสองอย่างนี้ส่งแบบเจาะจงคน: <b>ผู้แจ้งซ่อม</b> ส่งถึงเจ้าของใบนั้นใบเดียว และ <b>ช่าง</b> ส่งถึงเฉพาะช่างที่ถูกมอบหมายงานนั้น (ถ้าหาคนไม่เจอ ระบบจะไม่ส่งเลย ดีกว่าส่งหาทุกคน)</p>
   </div>
   `;
 }
