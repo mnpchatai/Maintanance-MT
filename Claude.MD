@@ -225,17 +225,33 @@ camera intent at all, so even `capture="environment"` opens the file manager
 — confirmed in the field, which is why `capture` alone was not enough. It
 opens a `getUserMedia` preview and draws the frame onto a canvas, bypassing
 the system file chooser entirely.
-Which path the ถ่ายภาพ button takes is decided per device by `takePhoto()`:
-`preferInAppCamera()` (Android AND `isInAppBrowser()` AND `getUserMedia`
-available) sends in-app browsers straight to the canvas camera, everything
-else — real Chrome/Firefox on Android, and all of iOS — keeps the native
-capture input, which gives the full system camera app and the better photo.
+The same dead end exists on desktop, for a different reason: Windows/Mac
+browsers ignore `capture` outright, so ถ่ายภาพ used to open the Open-file
+dialog every single time — the report was "it jumps into the album by
+itself", filmed in Edge on Windows — even though the laptop's webcam was
+right there.
+Which path the ถ่ายภาพ button takes is decided per device by `takePhoto()`,
+via `preferInAppCamera()`: with `getUserMedia` available it returns true for
+every non-mobile device (`isMobileDevice()` false) and for Android inside an
+in-app browser, so both go straight to the canvas camera. Real
+Chrome/Firefox on Android and all of iOS keep the native capture input,
+which gives the full system camera app and the better photo. `isIOS()` also
+checks `maxTouchPoints` because iPadOS reports itself as `Macintosh` — miss
+that and iPads fall to the desktop branch.
 Either way the other path stays one tap away: `photoFallbackHint()` renders
-the link inverted depending on which one is primary. And when `getUserMedia`
-fails inside an in-app browser (permission denied, WebView refuses), the
-button falls through to the capture input rather than dead-ending — that
-attempt is deliberately `quiet`, so only a *manual* tap on the hint link
-surfaces the error toast.
+the link inverted depending on which one is primary, and worded for what the
+tap actually does — on desktop that link is "เลือกไฟล์รูปจากเครื่อง" (a file
+dialog), not "เปิดกล้องของเครื่อง". When `getUserMedia` fails (permission
+denied, no camera, WebView refuses), the button falls through to the capture
+input rather than dead-ending. That attempt is deliberately `quiet` on
+mobile, so only a *manual* tap on the hint link surfaces the error toast; on
+desktop the fallthrough does toast first, otherwise the file dialog appearing
+after ถ่ายภาพ looks like the original bug all over again.
+`updateCamFlipVisibility()` hides สลับกล้อง when `enumerateDevices()` counts
+one camera (typical desktop). It hides only on a successful count — if the
+enumeration throws, the button stays, since a phone that can't be enumerated
+still has two cameras. It uses `visibility`, not `display`, to keep the
+shutter centred in the bar.
 `isInAppBrowser()` sniffs the UA for `Line/`, `IAB`, `FBAN`/`FBAV`/`FB_IAB`,
 `Instagram`, `MicroMessenger` and the bare Android-WebView marker `; wv)`.
 UA sniffing is a heuristic — the hint link is what saves a device the list

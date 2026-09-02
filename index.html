@@ -288,7 +288,7 @@
   <div class="cam-bar">
     <button type="button" onclick="closeInAppCamera()">ยกเลิก</button>
     <button type="button" class="cam-shutter" id="camShutter" onclick="shootInAppCamera()" aria-label="ถ่ายภาพ"></button>
-    <button type="button" onclick="flipInAppCamera()">สลับกล้อง</button>
+    <button type="button" id="camFlip" onclick="flipInAppCamera()">สลับกล้อง</button>
   </div>
 </div>
 
@@ -1216,6 +1216,12 @@ function inAppCameraSupported(){
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false);
 }
 function isAndroid(){ return /Android/i.test(navigator.userAgent || ''); }
+/* iPad รุ่นใหม่ส่ง UA เป็น Macintosh — ต้องดู maxTouchPoints ประกอบถึงจะแยกออกจาก Mac จริง */
+function isIOS(){
+  const ua = navigator.userAgent || '';
+  return /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+}
+function isMobileDevice(){ return isAndroid() || isIOS(); }
 /* เบราว์เซอร์ที่ฝังอยู่ในแอปอื่น (LINE, Facebook, Instagram, WeChat หรือ Android
    WebView ดิบๆ ที่มี "; wv)" ในสตริง) — พวกนี้บน Android มักไม่ยิง intent กล้องให้
    input[capture] เลย กดแล้วเด้งเป็นตัวจัดการไฟล์แทน จึงต้องข้ามไปใช้กล้องในแอป
@@ -1225,8 +1231,15 @@ function isInAppBrowser(){
   return /\bLine\//i.test(ua) || /\bIAB\b/i.test(ua) || /FBAN|FBAV|FB_IAB/i.test(ua)
       || /Instagram/i.test(ua) || /MicroMessenger/i.test(ua) || /;\s*wv\)/i.test(ua);
 }
+/* ใช้กล้องในแอปเป็นทางหลักเมื่อ input[capture] เปิดกล้องจริงให้ไม่ได้
+   - คอมพิวเตอร์ (Windows/Mac/Linux): เบราว์เซอร์เดสก์ท็อปไม่สนใจ capture เลย กด "ถ่ายภาพ"
+     แล้วเด้งหน้าต่างเลือกไฟล์ทุกครั้ง ทั้งที่โน้ตบุ๊ก/จอมีกล้องใช้ได้อยู่แล้ว
+   - Android ในเบราว์เซอร์ที่ฝังอยู่ในแอปอื่น: WebView ไม่ยิง intent กล้องให้
+   มือถือ/แท็บเล็ตที่เหลือยังใช้ input capture ก่อน เพราะได้แอปกล้องเต็มระบบ คุณภาพดีกว่า */
 function preferInAppCamera(){
-  return isAndroid() && isInAppBrowser() && inAppCameraSupported();
+  if(!inAppCameraSupported()) return false;
+  if(!isMobileDevice()) return true;
+  return isAndroid() && isInAppBrowser();
 }
 async function startCamStream(){
   const video = document.getElementById('camVideo');
@@ -1265,13 +1278,32 @@ async function openInAppCamera(target, opts){
     return false;
   }
   document.getElementById('camOverlay').classList.add('open');
+  updateCamFlipVisibility();
   return true;
 }
+/* เครื่องคอมส่วนใหญ่มีกล้องตัวเดียว ปุ่ม "สลับกล้อง" กดแล้วไม่มีอะไรเกิดขึ้น จึงซ่อนไว้
+   ซ่อนเฉพาะตอนที่นับกล้องได้จริงว่ามีตัวเดียว ถ้าอ่านรายชื่ออุปกรณ์ไม่ได้ให้แสดงไว้ตามเดิม
+   (ใช้ visibility ไม่ใช่ display เพื่อให้ปุ่มชัตเตอร์ยังอยู่กลางแถบเหมือนเดิม) */
+async function updateCamFlipVisibility(){
+  const btn = document.getElementById('camFlip');
+  if(!btn) return;
+  btn.style.visibility = 'visible';
+  if(!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) return;
+  try{
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    if(cams.length <= 1) btn.style.visibility = 'hidden';
+  }catch(e){ /* อ่านรายชื่ออุปกรณ์ไม่ได้ ก็ปล่อยให้ปุ่มแสดงไว้ */ }
+}
 /* ปุ่ม "ถ่ายภาพ" — เลือกทางที่น่าจะเปิดกล้องได้จริงบนเครื่องนั้น แล้วมีทางสำรองให้เสมอ
-   เบราว์เซอร์ในแอปบน Android: กล้องในแอปก่อน ถ้า getUserMedia ไม่ผ่านค่อยตกไป input capture
-   ที่เหลือ (Chrome/Safari/iOS): input capture ก่อนเพราะได้กล้องเต็มระบบ คุณภาพดีกว่า */
+   คอม และเบราว์เซอร์ในแอปบน Android: กล้องในแอปก่อน ถ้า getUserMedia ไม่ผ่านค่อยตกไป input capture
+   มือถือที่เหลือ (Chrome บน Android / iOS): input capture ก่อนเพราะได้กล้องเต็มระบบ คุณภาพดีกว่า */
 async function takePhoto(target, inputId){
-  if(preferInAppCamera() && await openInAppCamera(target, { quiet:true })) return;
+  if(preferInAppCamera()){
+    if(await openInAppCamera(target, { quiet:true })) return;
+    // เปิดกล้องไม่ได้ (ไม่มีกล้อง/ไม่อนุญาต) — บนคอมต้องบอกก่อน ไม่งั้นผู้ใช้จะงงว่า
+    // ทำไมกด "ถ่ายภาพ" แล้วเด้งหน้าต่างเลือกไฟล์ขึ้นมาเฉยๆ
+    if(!isMobileDevice()) toast('เปิดกล้องไม่สำเร็จ — กรุณาอนุญาตกล้องให้เบราว์เซอร์ หรือเลือกไฟล์รูปจากเครื่องแทน', true);
+  }
   openPhotoPicker(inputId);
 }
 async function flipInAppCamera(){
@@ -1279,6 +1311,10 @@ async function flipInAppCamera(){
   try{ await startCamStream(); }
   catch(e){ console.error(e); toast('สลับกล้องไม่สำเร็จ', true); }
 }
+/* บนคอมมีคีย์บอร์ด — ให้ Esc ปิดกล้องได้เหมือน overlay ทั่วไป */
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && camStream) closeInAppCamera();
+});
 function closeInAppCamera(){
   if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
   const video = document.getElementById('camVideo');
@@ -1305,7 +1341,11 @@ function shootInAppCamera(){
    บนเครื่องนั้น เพื่อให้ทางที่เหลือกดถึงได้เสมอด้วยการแตะครั้งเดียว */
 function photoFallbackHint(target, inputId){
   if(preferInAppCamera()){
-    return `<div class="photo-fallback">อยากใช้แอปกล้องของเครื่องแทน? <button type="button" onclick="openPhotoPicker('${inputId}')">เปิดกล้องของเครื่อง</button></div>`;
+    // บนคอม ปุ่มนี้เปิดหน้าต่างเลือกไฟล์ ไม่ใช่กล้อง จึงต้องเรียกให้ตรงกับที่เห็นจริง
+    const hint = isMobileDevice()
+      ? { lead:'อยากใช้แอปกล้องของเครื่องแทน?', label:'เปิดกล้องของเครื่อง' }
+      : { lead:'อยากใช้รูปที่มีอยู่แล้ว?', label:'เลือกไฟล์รูปจากเครื่อง' };
+    return `<div class="photo-fallback">${hint.lead} <button type="button" onclick="openPhotoPicker('${inputId}')">${hint.label}</button></div>`;
   }
   return `<div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('${target}')">ใช้กล้องในแอป</button></div>`;
 }
