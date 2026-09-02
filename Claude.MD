@@ -247,21 +247,23 @@ input rather than dead-ending. That attempt is deliberately `quiet` on
 mobile, so only a *manual* tap on the hint link surfaces the error toast; on
 desktop the fallthrough does toast first, otherwise the file dialog appearing
 after ถ่ายภาพ looks like the original bug all over again.
+Routing lives in `captureInputOpensCamera()` — true only for a *full*
+browser on a phone (Chrome on Android, Safari on iOS), where the capture
+input really does launch the camera app and gives the better photo.
+Everywhere else — desktop, and any in-app browser — ถ่ายภาพ goes to the
+canvas camera, and when that fails it **stops**: it never quietly opens the
+file/album picker, on any platform. Falling through is what produced the
+original report, twice. The stop sets `state.ui.camBlocked` and
+`photoFallbackHint()` swaps in `camBlockedPanel()`, worded per platform
+(desktop: how to re-allow the camera, plus a file-picker button; mobile
+in-app: open-in-real-browser plus the album workaround).
 LINE's Android WebView is the case where *both* paths are dead: it never
 implements the camera permission prompt, so `getUserMedia` rejects
 (`NotAllowedError`/`NotFoundError`), and `capture` opens the Android photo
 picker — filmed in the field, the ถ่ายภาพ button landing straight in the
-album. So when the in-app camera fails on a mobile in-app browser
-`takePhoto()` stops instead of falling through to the picker: falling
-through is exactly what looks like "the app jumped to the album by itself".
-It sets `state.ui.camBlocked` (and `state.ui.camErr`, the DOMException name,
-shown in the panel so a screenshot is enough to diagnose) and re-renders;
-`photoFallbackHint()` then swaps the one-line link for `camBlockedPanel()` —
-open-in-real-browser link, a "ลองเปิดกล้องของเครื่อง" button for devices
-where `capture` does work, and the workaround that always works (shoot with
-the phone's camera app, attach via เลือกจากอัลบั้ม). A successful
-`openInAppCamera()` clears the flag. Desktop still falls through to the file
-dialog, which is a usable substitute there — it only needs the toast.
+album. `state.ui.camErr` carries the DOMException name into the panel, so a
+screenshot of the panel is enough to diagnose the next report. A successful
+`openInAppCamera()` clears both flags.
 `externalBrowserUrl()` appends `openExternalBrowser=1` for LINE (LINE hands
 that link to the system browser) and builds an `intent://…package=com.android.chrome`
 URL for other Android WebViews. It must stay behind an `<a target="_blank">`:
@@ -270,6 +272,14 @@ honor it and wipe the half-typed form, which is not persisted anywhere.
 `startCamStream()` retries once with a bare `{video:true}` when the detailed
 constraints throw — but not on `NotAllowedError`/`SecurityError`, where a
 retry cannot help.
+**Bump `APP_VERSION` in every deploy that changes `index.html`.**
+`checkForUpdate()` re-fetches the file and compares only that constant, so a
+shipped fix with an unchanged version leaves every open tab — and every
+WebView holding a cached copy — silently running the old code with no
+refresh prompt. That is how a fix can be live and still "ยังเหมือนเดิม".
+`render()` also prints the running `APP_VERSION` at the foot of the page
+(`.app-version`), which is what tells you whether a phone is on the new code
+at all before you debug anything else.
 `updateCamFlipVisibility()` hides สลับกล้อง when `enumerateDevices()` counts
 one camera (typical desktop). It hides only on a successful count — if the
 enumeration throws, the button stays, since a phone that can't be enumerated

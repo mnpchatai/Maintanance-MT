@@ -129,6 +129,12 @@
   .photo-fallback{
     margin-top:7px; text-align:center; font-size:12px; color:var(--slate);
   }
+  /* เลขเวอร์ชันท้ายหน้า — เวลาผู้ใช้แจ้งปัญหาจะได้รู้ว่าเครื่องนั้นรันโค้ดตัวไหนอยู่
+     (WebView ในแอปแคชไฟล์ไว้นาน อาการ "แก้แล้วยังเหมือนเดิม" มักเป็นเพราะยังเป็นโค้ดเก่า) */
+  .app-version{
+    padding:14px 16px calc(18px + env(safe-area-inset-bottom));
+    text-align:center; color:var(--slate); font-size:11px; opacity:.75;
+  }
   .cam-blocked{
     margin-top:8px; padding:10px 12px; border:1px solid var(--line); border-left:3px solid var(--orange);
     border-radius:8px; background:#fff8f0; font-size:12.5px; line-height:1.55; color:var(--ink);
@@ -426,7 +432,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-02.2';
+const APP_VERSION = '2026-09-02.3';
 
 async function storeGet(key){
   try{
@@ -1245,16 +1251,16 @@ function isInAppBrowser(){
   return /\bLine\//i.test(ua) || /\bIAB\b/i.test(ua) || /FBAN|FBAV|FB_IAB/i.test(ua)
       || /Instagram/i.test(ua) || /MicroMessenger/i.test(ua) || /;\s*wv\)/i.test(ua);
 }
-/* ใช้กล้องในแอปเป็นทางหลักเมื่อ input[capture] เปิดกล้องจริงให้ไม่ได้
-   - คอมพิวเตอร์ (Windows/Mac/Linux): เบราว์เซอร์เดสก์ท็อปไม่สนใจ capture เลย กด "ถ่ายภาพ"
-     แล้วเด้งหน้าต่างเลือกไฟล์ทุกครั้ง ทั้งที่โน้ตบุ๊ก/จอมีกล้องใช้ได้อยู่แล้ว
-   - Android ในเบราว์เซอร์ที่ฝังอยู่ในแอปอื่น: WebView ไม่ยิง intent กล้องให้
-   มือถือ/แท็บเล็ตที่เหลือยังใช้ input capture ก่อน เพราะได้แอปกล้องเต็มระบบ คุณภาพดีกว่า */
-function preferInAppCamera(){
-  if(!inAppCameraSupported()) return false;
-  if(!isMobileDevice()) return true;
-  return isAndroid() && isInAppBrowser();
+/* input[capture] เปิดกล้องได้จริงเฉพาะเบราว์เซอร์เต็มตัวบนมือถือ (Chrome บน Android,
+   Safari บน iOS) — ที่นั่นให้ใช้ทางนี้ก่อน เพราะได้แอปกล้องเต็มระบบ คุณภาพดีกว่า
+   ที่เหลือ capture ไม่เปิดกล้องให้เลย แล้วยังเงียบด้วย:
+   - คอมพิวเตอร์: เบราว์เซอร์เดสก์ท็อปไม่สนใจ capture เด้งหน้าต่างเลือกไฟล์ทุกครั้ง
+   - เบราว์เซอร์ที่ฝังอยู่ในแอปอื่น (LINE ฯลฯ) บน Android: ไม่ยิง intent กล้อง
+     แต่เด้งเข้าตัวเลือกรูปของ Android แทน — คือ "กดถ่ายภาพแล้วเข้าหน้าอัลบั้ม" ที่แจ้งกันมา */
+function captureInputOpensCamera(){
+  return isMobileDevice() && !isInAppBrowser();
 }
+function preferInAppCamera(){ return !captureInputOpensCamera(); }
 async function startCamStream(){
   const video = document.getElementById('camVideo');
   if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
@@ -1281,6 +1287,7 @@ async function openInAppCamera(target, opts){
   const quiet = !!(opts && opts.quiet);
   if(photoBucketFull(target)) return true;
   if(!inAppCameraSupported()){
+    state.ui.camErr = navigator.mediaDevices ? 'NoGetUserMedia' : 'NoMediaDevices';
     if(!quiet) toast('เบราว์เซอร์นี้ไม่รองรับกล้องในแอป กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
     return false;
   }
@@ -1319,25 +1326,15 @@ async function updateCamFlipVisibility(){
     if(cams.length <= 1) btn.style.visibility = 'hidden';
   }catch(e){ /* อ่านรายชื่ออุปกรณ์ไม่ได้ ก็ปล่อยให้ปุ่มแสดงไว้ */ }
 }
-/* ปุ่ม "ถ่ายภาพ" — เลือกทางที่น่าจะเปิดกล้องได้จริงบนเครื่องนั้น แล้วมีทางสำรองให้เสมอ
-   คอม และเบราว์เซอร์ในแอปบน Android: กล้องในแอปก่อน ถ้า getUserMedia ไม่ผ่านค่อยตกไป input capture
-   มือถือที่เหลือ (Chrome บน Android / iOS): input capture ก่อนเพราะได้กล้องเต็มระบบ คุณภาพดีกว่า */
+/* ปุ่ม "ถ่ายภาพ" — ห้ามจบลงที่ตัวเลือกไฟล์/อัลบั้มโดยไม่บอกอะไรเลย ไม่ว่าบนเครื่องไหน
+   เครื่องที่ capture ใช้ได้: ส่งไป input capture ตามเดิม
+   ที่เหลือ: กล้องในแอป ถ้าเปิดไม่ได้ให้หยุดแล้วขึ้นกล่องบอกวิธี ไม่ตกไปเปิดอัลบั้มเงียบๆ */
 async function takePhoto(target, inputId){
-  if(preferInAppCamera()){
-    if(await openInAppCamera(target, { quiet:true })) return;
-    // เปิดกล้องในแอปไม่ได้ ถึงตรงนี้เหลือแค่ input[capture] ซึ่งในเบราว์เซอร์ที่ฝังอยู่ในแอป
-    // (LINE บน Android) ไม่ยิง intent กล้อง แต่เด้งเข้าตัวเลือกรูปของ Android แทน — ตกไป
-    // เงียบๆ ผู้ใช้จะเห็นเป็น "กดถ่ายภาพแล้วแอปพาไปหน้าอัลบั้มเอง" จึงต้องหยุดแล้วบอกทางออก
-    if(isMobileDevice()){
-      state.ui.camBlocked = true;
-      render();
-      toast('เบราว์เซอร์นี้ไม่ยอมให้ใช้กล้อง — ดูวิธีถ่ายรูปได้ใต้ปุ่มถ่ายภาพ', true);
-      return;
-    }
-    // บนคอมหน้าต่างเลือกไฟล์ยังพอใช้แทนได้ แค่ต้องบอกก่อนว่าทำไมถึงเด้งขึ้นมา
-    toast('เปิดกล้องไม่สำเร็จ — กรุณาอนุญาตกล้องให้เบราว์เซอร์ หรือเลือกไฟล์รูปจากเครื่องแทน', true);
-  }
-  openPhotoPicker(inputId);
+  if(captureInputOpensCamera()){ openPhotoPicker(inputId); return; }
+  if(await openInAppCamera(target, { quiet:true })) return;
+  state.ui.camBlocked = true;
+  render();
+  toast('เปิดกล้องไม่สำเร็จ — ดูวิธีถ่ายรูปได้ใต้ปุ่มถ่ายภาพ', true);
 }
 /* ลิงก์ "เปิดในเบราว์เซอร์ของเครื่อง" — เป็นทางเดียวที่เหลือเมื่อ WebView ของแอปไม่ให้ทั้ง
    getUserMedia และ intent กล้อง
@@ -1355,11 +1352,21 @@ function externalBrowserUrl(){
 }
 /* กล่องบอกทางออกเมื่อกล้องถูกบล็อก — มีทั้งลิงก์เปิดเบราว์เซอร์จริง ปุ่มลองกล้องของเครื่อง
    อีกรอบ (บางเครื่อง capture ใช้ได้) และวิธีที่ได้ผลเสมอคือถ่ายไว้ก่อนแล้วแนบจากอัลบั้ม */
-function camBlockedPanel(inputId){
+function camBlockedPanel(target, inputId){
   const code = state.ui.camErr ? ` <span class="cam-blocked-code">(${escapeHtml(state.ui.camErr)})</span>` : '';
+  if(!isMobileDevice()){
+    return `<div class="cam-blocked">
+      <b>เปิดกล้องของเครื่องไม่สำเร็จ</b>${code}<br>
+      ถ้าเบราว์เซอร์ขึ้นถามขออนุญาตใช้กล้อง ให้กด "อนุญาต" — ถ้าเคยกดปฏิเสธไว้ ให้กดไอคอนรูปกล้องหรือแม่กุญแจข้างช่องที่อยู่เว็บ แล้วเปิดสิทธิ์กล้องให้หน้านี้ จากนั้นกดถ่ายภาพอีกครั้ง
+      <div class="cam-blocked-actions">
+        <button type="button" onclick="takePhoto('${target}','${inputId}')">ลองเปิดกล้องอีกครั้ง</button>
+        <button type="button" onclick="openPhotoPicker('${inputId}')">เลือกไฟล์รูปจากเครื่อง</button>
+      </div>
+    </div>`;
+  }
   return `<div class="cam-blocked">
     <b>เบราว์เซอร์ที่เปิดหน้านี้อยู่ไม่ยอมให้ใช้กล้อง</b>${code}<br>
-    กด "ถ่ายภาพ" แล้วจึงเด้งเข้าอัลบั้มแทนที่จะเปิดกล้อง เปิดหน้านี้ในเบราว์เซอร์ของเครื่อง (Chrome) แล้วถ่ายได้ตามปกติ
+    ถ้ากดถ่ายภาพแล้วเด้งเข้าอัลบั้ม แปลว่าเป็นเบราว์เซอร์ในแอป (เช่นของ LINE) เปิดหน้านี้ในเบราว์เซอร์ของเครื่อง (Chrome) แล้วถ่ายได้ตามปกติ
     <div class="cam-blocked-actions">
       <a href="${escapeHtml(externalBrowserUrl())}" target="_blank" rel="noopener">เปิดหน้านี้ในเบราว์เซอร์</a>
       <button type="button" onclick="openPhotoPicker('${inputId}')">ลองเปิดกล้องของเครื่อง</button>
@@ -1401,7 +1408,7 @@ function shootInAppCamera(){
 /* ลิงก์สลับไปใช้อีกวิธีหนึ่ง — ข้อความกลับด้านตามว่าปุ่มถ่ายภาพเลือกทางไหนเป็นทางหลัก
    บนเครื่องนั้น เพื่อให้ทางที่เหลือกดถึงได้เสมอด้วยการแตะครั้งเดียว */
 function photoFallbackHint(target, inputId){
-  if(state.ui.camBlocked && isMobileDevice()) return camBlockedPanel(inputId);
+  if(state.ui.camBlocked) return camBlockedPanel(target, inputId);
   if(preferInAppCamera()){
     // บนคอม ปุ่มนี้เปิดหน้าต่างเลือกไฟล์ ไม่ใช่กล้อง จึงต้องเรียกให้ตรงกับที่เห็นจริง
     const hint = isMobileDevice()
@@ -2868,7 +2875,8 @@ function render(){
       🔄 มีการอัปเดตระบบเวอร์ชันใหม่ — กรุณารีเฟรชหน้าเพื่อใช้งานเวอร์ชันล่าสุด
       <button class="btn btn-primary btn-sm" onclick="location.reload()">รีเฟรชตอนนี้</button>
     </div>` : '';
-  app.innerHTML = updateBanner + renderHeader() + `<main>${body}</main>`;
+  app.innerHTML = updateBanner + renderHeader() + `<main>${body}</main>`
+    + `<div class="app-version">เวอร์ชัน ${APP_VERSION}</div>`;
 
   if(fid){
     const restored = app.querySelector(`[data-fid="${fid}"]`);
