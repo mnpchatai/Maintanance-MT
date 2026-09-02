@@ -412,7 +412,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-02.1';
+const APP_VERSION = '2026-09-02.2';
 
 async function storeGet(key){
   try{
@@ -1215,18 +1215,39 @@ function photoBucketFull(target){
 function inAppCameraSupported(){
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false);
 }
+function isAndroid(){ return /Android/i.test(navigator.userAgent || ''); }
+/* เบราว์เซอร์ที่ฝังอยู่ในแอปอื่น (LINE, Facebook, Instagram, WeChat หรือ Android
+   WebView ดิบๆ ที่มี "; wv)" ในสตริง) — พวกนี้บน Android มักไม่ยิง intent กล้องให้
+   input[capture] เลย กดแล้วเด้งเป็นตัวจัดการไฟล์แทน จึงต้องข้ามไปใช้กล้องในแอป
+   ตั้งแต่แรก ไม่ใช่รอให้ผู้ใช้กดลิงก์สำรองเอง */
+function isInAppBrowser(){
+  const ua = navigator.userAgent || '';
+  return /\bLine\//i.test(ua) || /\bIAB\b/i.test(ua) || /FBAN|FBAV|FB_IAB/i.test(ua)
+      || /Instagram/i.test(ua) || /MicroMessenger/i.test(ua) || /;\s*wv\)/i.test(ua);
+}
+function preferInAppCamera(){
+  return isAndroid() && isInAppBrowser() && inAppCameraSupported();
+}
 async function startCamStream(){
   const video = document.getElementById('camVideo');
   if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
-  camStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal: camFacing } }, audio:false });
+  // ขอความละเอียดสูงไว้ก่อน (ideal ไม่ใช่ exact — กล้องที่ให้ไม่ได้จะคืนขนาดที่ทำได้แทน
+  // ไม่ throw) ค่า default ของ getUserMedia คือ 640x480 ซึ่งอ่านป้ายเครื่องจักรไม่ออก
+  camStream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:{ ideal: camFacing }, width:{ ideal:1920 }, height:{ ideal:1080 } },
+    audio:false
+  });
   video.srcObject = camStream;
   try{ await video.play(); }catch(e){ /* บาง WebView เล่นเองอยู่แล้ว */ }
 }
-async function openInAppCamera(target){
-  if(photoBucketFull(target)) return;
+/* คืน true เมื่อเปิดกล้องในแอปได้จริง — ผู้เรียกจะได้รู้ว่าต้องตกไปทางสำรองหรือไม่
+   quiet = เรียกแบบอัตโนมัติ ถ้าไม่สำเร็จให้เงียบไว้แล้วปล่อยให้ผู้เรียกจัดการต่อ */
+async function openInAppCamera(target, opts){
+  const quiet = !!(opts && opts.quiet);
+  if(photoBucketFull(target)) return true;
   if(!inAppCameraSupported()){
-    toast('เบราว์เซอร์นี้ไม่รองรับกล้องในแอป กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
-    return;
+    if(!quiet) toast('เบราว์เซอร์นี้ไม่รองรับกล้องในแอป กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
+    return false;
   }
   camTarget = target;
   camFacing = 'environment';
@@ -1234,14 +1255,24 @@ async function openInAppCamera(target){
     await startCamStream();
   }catch(e){
     console.error(e);
-    const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
-    toast(denied
-      ? 'ไม่ได้รับอนุญาตให้ใช้กล้อง กรุณาอนุญาตกล้องให้เบราว์เซอร์ หรือเปิดลิงก์ใน Chrome'
-      : 'เปิดกล้องไม่สำเร็จ กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
+    if(!quiet){
+      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      toast(denied
+        ? 'ไม่ได้รับอนุญาตให้ใช้กล้อง กรุณาอนุญาตกล้องให้เบราว์เซอร์ หรือเปิดลิงก์ใน Chrome'
+        : 'เปิดกล้องไม่สำเร็จ กรุณาเปิดลิงก์ใน Chrome แล้วลองใหม่', true);
+    }
     closeInAppCamera();
-    return;
+    return false;
   }
   document.getElementById('camOverlay').classList.add('open');
+  return true;
+}
+/* ปุ่ม "ถ่ายภาพ" — เลือกทางที่น่าจะเปิดกล้องได้จริงบนเครื่องนั้น แล้วมีทางสำรองให้เสมอ
+   เบราว์เซอร์ในแอปบน Android: กล้องในแอปก่อน ถ้า getUserMedia ไม่ผ่านค่อยตกไป input capture
+   ที่เหลือ (Chrome/Safari/iOS): input capture ก่อนเพราะได้กล้องเต็มระบบ คุณภาพดีกว่า */
+async function takePhoto(target, inputId){
+  if(preferInAppCamera() && await openInAppCamera(target, { quiet:true })) return;
+  openPhotoPicker(inputId);
 }
 async function flipInAppCamera(){
   camFacing = camFacing === 'environment' ? 'user' : 'environment';
@@ -1269,6 +1300,14 @@ function shootInAppCamera(){
   closeInAppCamera();
   toast('เพิ่มรูปแล้ว');
   render();
+}
+/* ลิงก์สลับไปใช้อีกวิธีหนึ่ง — ข้อความกลับด้านตามว่าปุ่มถ่ายภาพเลือกทางไหนเป็นทางหลัก
+   บนเครื่องนั้น เพื่อให้ทางที่เหลือกดถึงได้เสมอด้วยการแตะครั้งเดียว */
+function photoFallbackHint(target, inputId){
+  if(preferInAppCamera()){
+    return `<div class="photo-fallback">อยากใช้แอปกล้องของเครื่องแทน? <button type="button" onclick="openPhotoPicker('${inputId}')">เปิดกล้องของเครื่อง</button></div>`;
+  }
+  return `<div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('${target}')">ใช้กล้องในแอป</button></div>`;
 }
 async function handlePhotoInput(input){
   const files = takeFilesFromInput(input);
@@ -1835,12 +1874,12 @@ function renderNew(){
     <div class="field">
       <label class="field-label">แนบรูปภาพประกอบ (สูงสุด 5 รูป)</label>
       <div class="photo-actions">
-        <button type="button" class="photo-drop" onclick="openPhotoPicker('photoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
+        <button type="button" class="photo-drop" onclick="takePhoto('form','photoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
         <button type="button" class="photo-drop" onclick="openPhotoPicker('photoGalleryInput')">🖼️ เลือกจากอัลบั้ม<small>เลือกได้หลายรูป</small></button>
       </div>
       <input id="photoCameraInput" class="photo-file-input" type="file" accept="image/*" capture="environment" onchange="handlePhotoInput(this)">
       <input id="photoGalleryInput" class="photo-file-input" type="file" accept="image/*" multiple onchange="handlePhotoInput(this)">
-      <div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('form')">ใช้กล้องในแอป</button></div>
+      ${photoFallbackHint('form', 'photoCameraInput')}
       <div class="photo-thumbs">${photoThumbs}</div>
     </div>
 
@@ -1937,12 +1976,12 @@ function renderDetail(){
       <div class="field" style="margin-top:10px; margin-bottom:0;">
         <label class="field-label">แนบรูปภาพประกอบเพิ่มเติม (สูงสุด 5 รูป)</label>
         <div class="photo-actions">
-          <button type="button" class="photo-drop" onclick="openPhotoPicker('resubmitPhotoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
+          <button type="button" class="photo-drop" onclick="takePhoto('resubmit','resubmitPhotoCameraInput')">📷 ถ่ายภาพ<small>เปิดกล้องถ่ายรูปตอนนี้</small></button>
           <button type="button" class="photo-drop" onclick="openPhotoPicker('resubmitPhotoGalleryInput')">🖼️ เลือกจากอัลบั้ม<small>เลือกได้หลายรูป</small></button>
         </div>
         <input id="resubmitPhotoCameraInput" class="photo-file-input" type="file" accept="image/*" capture="environment" onchange="handleResubmitPhotoInput(this)">
         <input id="resubmitPhotoGalleryInput" class="photo-file-input" type="file" accept="image/*" multiple onchange="handleResubmitPhotoInput(this)">
-        <div class="photo-fallback">กดถ่ายภาพแล้วกล้องไม่ขึ้น? <button type="button" onclick="openInAppCamera('resubmit')">ใช้กล้องในแอป</button></div>
+        ${photoFallbackHint('resubmit', 'resubmitPhotoCameraInput')}
         <div class="photo-thumbs">${photoThumbs}</div>
       </div>` : '';
     return `

@@ -219,16 +219,33 @@ dropped exactly those — the freshly-taken photo vanished with no error.
 `takeFilesFromInput()` clears `input.value` right after reading the
 FileList, so shooting a second photo (same filename, `image.jpg`) still
 fires `change`.
-In-app camera fallback (`openInAppCamera`/`shootInAppCamera`) is the last
-resort for the case none of the above can fix: LINE's in-app browser on
-Android often does not implement the camera intent at all, so the capture
-input opens the file manager instead of the camera. The fallback link
-under the buttons opens a `getUserMedia` preview and draws the frame onto
-a canvas, bypassing the system file chooser entirely. Its markup lives
-outside `#app` (next to `#toastWrap`) on purpose — `render()` overwrites
-`app.innerHTML` wholesale, which would tear out a live `<video>` mid-shot.
-It needs HTTPS, which GitHub Pages gives us; on a browser that refuses
-`getUserMedia` it says so and points the user at Chrome.
+In-app camera (`openInAppCamera`/`shootInAppCamera`) covers the case none of
+the above can fix: LINE's in-app browser on Android does not implement the
+camera intent at all, so even `capture="environment"` opens the file manager
+— confirmed in the field, which is why `capture` alone was not enough. It
+opens a `getUserMedia` preview and draws the frame onto a canvas, bypassing
+the system file chooser entirely.
+Which path the ถ่ายภาพ button takes is decided per device by `takePhoto()`:
+`preferInAppCamera()` (Android AND `isInAppBrowser()` AND `getUserMedia`
+available) sends in-app browsers straight to the canvas camera, everything
+else — real Chrome/Firefox on Android, and all of iOS — keeps the native
+capture input, which gives the full system camera app and the better photo.
+Either way the other path stays one tap away: `photoFallbackHint()` renders
+the link inverted depending on which one is primary. And when `getUserMedia`
+fails inside an in-app browser (permission denied, WebView refuses), the
+button falls through to the capture input rather than dead-ending — that
+attempt is deliberately `quiet`, so only a *manual* tap on the hint link
+surfaces the error toast.
+`isInAppBrowser()` sniffs the UA for `Line/`, `IAB`, `FBAN`/`FBAV`/`FB_IAB`,
+`Instagram`, `MicroMessenger` and the bare Android-WebView marker `; wv)`.
+UA sniffing is a heuristic — the hint link is what saves a device the list
+misses, so keep it visible.
+The overlay markup lives outside `#app` (next to `#toastWrap`) on purpose —
+`render()` overwrites `app.innerHTML` wholesale, which would tear out a live
+`<video>` mid-shot. `startCamStream()` asks for `1920x1080` as an `ideal`
+constraint (never `exact`, which would throw on a camera that can't do it):
+the `getUserMedia` default is 640x480, too coarse to read a machine's
+nameplate. It needs HTTPS, which GitHub Pages gives us.
 Polling: `pollForUpdates()` runs every 7s via `setInterval`, re-fetches
 `config`/`orders`/`notifications`, and only calls `render()` if something
 actually changed (JSON-string diff) — this is how edits made directly in
