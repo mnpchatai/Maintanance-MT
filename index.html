@@ -440,6 +440,35 @@ const INSPECTOR_OPINION_META = {
   self_repair: 'ซ่อมเอง',
   buy_parts:   'ซื้ออุปกรณ์มาทำเอง',
 };
+/* ขั้นตอนความคืบหน้าของแต่ละ "ความคิดเห็นของช่างผู้ตรวจสอบ" — เดิมเลือกแนวทางแล้วจบ
+   ไม่มีที่ให้บันทึกว่าแนวทางนั้นเดินไปถึงไหน (ส่งซ่อมออกไปวันไหน ของที่สั่งมาส่งหรือยัง)
+   ผู้แจ้งกับ ผจก.แผนกซ่อมบำรุงจึงต้องไปตามถามกันเอง ตอนนี้แต่ละแนวทางมีหมุดของตัวเอง
+   กดบันทึกได้พร้อมวันที่ + หมายเหตุ แล้วยิงแจ้งเตือนหาผู้เกี่ยวข้องทุกครั้ง (ผู้แจ้ง /
+   ผจก.แผนกซ่อมบำรุง / ช่างที่ถูกมอบหมาย)
+   กติกา: หมุดต้องบันทึกเรียงตามลำดับ ข้ามขั้นไม่ได้ (บังคับทั้งในปุ่มและใน saveOpinionStep
+   เผื่อหน้าจอค้างอยู่กับข้อมูลเก่า) และห้ามแตะ o.status — สถานะใบยังเดินตามเส้นทางเดิม
+   (มอบหมาย → กำลังซ่อม → รอตรวจรับ) หมุดพวกนี้เป็นข้อมูลประกอบที่วิ่งคู่กันไปเท่านั้น */
+/* pendingLabel = "ขั้นนี้ยังไม่ถูกบันทึก แปลว่าใบนี้กำลังรออะไรอยู่" ใช้โชว์คู่กับสถานะใบ
+   ซ่อมเองไม่ต้องรอของหรือรอใครจากข้างนอก จึงเว้นว่างไว้ทั้งสองขั้น (ไม่ต้องมีป้ายรอ) */
+const OPINION_STEPS = {
+  send_repair: [
+    { key:'sent',     label:'เริ่มส่งซ่อม',           dateLabel:'วันที่ส่งซ่อม',              btn:'📤 บันทึกวันที่ส่งซ่อม',        doneLabel:'ส่งซ่อมแล้ว',   pendingLabel:'รอส่งออกไปซ่อม',        notify:'ส่งเครื่องจักร/อุปกรณ์ออกไปซ่อมแล้ว' },
+    { key:'repaired', label:'ซ่อมเสร็จ / รับของกลับ', dateLabel:'วันที่ซ่อมเสร็จ / รับของกลับ', btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'รอของกลับจากที่ส่งซ่อม', notify:'งานที่ส่งซ่อมเสร็จเรียบร้อย และรับของกลับแล้ว' },
+  ],
+  external: [
+    { key:'booked',   label:'นัดหมายช่างภายนอก',      dateLabel:'วันที่นัดหมาย',              btn:'📞 บันทึกวันที่นัดช่างภายนอก',   doneLabel:'นัดช่างแล้ว',   pendingLabel:'รอนัดช่างภายนอก',       notify:'นัดหมายช่างภายนอกเข้าซ่อมเรียบร้อยแล้ว' },
+    { key:'arrived',  label:'ช่างภายนอกเข้าดำเนินการ', dateLabel:'วันที่ช่างเข้าดำเนินการ',     btn:'🧰 บันทึกวันที่ช่างเข้าดำเนินการ', doneLabel:'ช่างเข้าแล้ว',  pendingLabel:'รอช่างภายนอกเข้ามา',    notify:'ช่างภายนอกเข้าดำเนินการซ่อมแล้ว' },
+    { key:'finished', label:'ช่างภายนอกซ่อมเสร็จ',    dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'รอช่างภายนอกซ่อมเสร็จ', notify:'ช่างภายนอกซ่อมเสร็จเรียบร้อยแล้ว' },
+  ],
+  self_repair: [
+    { key:'started',  label:'เริ่มลงมือซ่อมเอง',       dateLabel:'วันที่เริ่มซ่อม',             btn:'▶ บันทึกวันที่เริ่มซ่อม',        doneLabel:'เริ่มซ่อมแล้ว', pendingLabel:'',                     notify:'เริ่มลงมือซ่อมเองแล้ว' },
+    { key:'finished', label:'ซ่อมเองเสร็จ',           dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'',                     notify:'ซ่อมเองเสร็จเรียบร้อยแล้ว' },
+  ],
+  buy_parts: [
+    { key:'ordered',   label:'สั่งของเรียบร้อย',       dateLabel:'วันที่สั่งซื้อ',              btn:'🧾 บันทึกว่าสั่งของเรียบร้อย',   doneLabel:'สั่งของแล้ว',   pendingLabel:'รอสั่งซื้ออุปกรณ์',     notify:'สั่งซื้ออุปกรณ์เรียบร้อยแล้ว รอของมาส่ง' },
+    { key:'delivered', label:'ของมาส่งเรียบร้อย',      dateLabel:'วันที่ของมาส่ง',             btn:'📦 บันทึกว่าของมาส่งเรียบร้อย',  doneLabel:'ของมาส่งแล้ว',  pendingLabel:'รออุปกรณ์มาส่ง',        notify:'อุปกรณ์ที่สั่งซื้อมาส่งเรียบร้อยแล้ว พร้อมดำเนินการซ่อม' },
+  ],
+};
 
 const emptyForm = () => ({ dept:'', docType:'', machineCode:'', machineSearch:'', machineName:'', cause:'', neededDate:'', urgent:false, requestedBy:'', photos:[] });
 const emptyPartRow = () => ({ name:'', qty:'', unit:'', price:'', shop:'', note:'' });
@@ -478,7 +507,7 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
@@ -502,7 +531,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.5';
+const APP_VERSION = '2026-09-03.7';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1213,6 +1242,12 @@ function fmtDate(dstr){
   const d = new Date(dstr+'T00:00:00');
   return d.toLocaleDateString('th-TH', { day:'2-digit', month:'2-digit', year:'2-digit' });
 }
+/* วันนี้ในรูปแบบ YYYY-MM-DD ตามเวลาเครื่องผู้ใช้ — ห้ามใช้ toISOString() ทำงานนี้
+   เพราะมันคืนค่าเป็น UTC ช่วงเที่ยงคืน-ตี 7 ตามเวลาไทยจะได้ "เมื่อวาน" เป็นค่าตั้งต้น */
+function todayLocalIso(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
 function yyNow(){ return String(new Date().getFullYear() % 100).padStart(2,'0'); }
 function previewDocNumber(deptCode){
   if(!deptCode) return 'xx---/'+yyNow();
@@ -1918,6 +1953,9 @@ async function submitOrder(){
     approvals: { fm:{status:null,by:'',at:'',note:''}, gm:{status:null,by:'',at:'',note:''} },
     assignment: { technicians:[], assignedBy:'', assignedAt:'', startDate:'', endDate:'', executionPlan:'', receivedByName:'' },
     maintRecord: null,
+    // ความคืบหน้าตามแนวทางที่ช่างผู้ตรวจสอบเลือกไว้ — { opinion, steps:{ <stepKey>:{date,note,by,at} } }
+    // ใบเก่าที่ไม่มีคีย์นี้อ่านผ่าน opinionProgressOf() ได้ตามปกติ (คืนอ็อบเจกต์ว่าง)
+    opinionProgress: null,
     verification: null,
     verificationHistory: [],
     statusHistory: [{ status:'PENDING_FM', at: nowIso(), note:'สร้างใบแจ้งซ่อม โดย ' + f.requestedBy.trim() + (f.urgent ? ' (ต้องการด่วน)' : '') }],
@@ -2228,11 +2266,136 @@ async function saveMaintRecord(id){
   const parts = state.ui.maintRecordParts
     .filter(p => p.name.trim())
     .map(p => ({ name:p.name.trim(), qty:p.qty.trim(), unit:p.unit.trim(), price:p.price.trim(), shop:p.shop.trim(), note:p.note.trim() }));
+  const prevOpinion = o.maintRecord && o.maintRecord.inspectorOpinion;
   o.maintRecord = { causeAnalysis: cause, inspectorOpinion: opinion, parts, updatedBy: ROLES.maint.label, updatedAt: nowIso() };
+  // เปลี่ยนแนวทางแล้ว หมุดความคืบหน้าของแนวทางเดิมใช้ต่อไม่ได้ (คนละชุดขั้นตอน) — ล้างทิ้ง
+  // แล้วบันทึกไว้ใน "ลำดับเหตุการณ์" ว่าเปลี่ยนจากอะไรเป็นอะไร ประวัติหมุดเดิมยังอ่านย้อนได้จากที่นั่น
+  if(prevOpinion && prevOpinion !== opinion && o.opinionProgress){
+    o.opinionProgress = null;
+    o.statusHistory.push({ status:o.status, at: nowIso(),
+      note:'เปลี่ยนแนวทางจาก "' + (INSPECTOR_OPINION_META[prevOpinion]||prevOpinion) + '" เป็น "' + INSPECTOR_OPINION_META[opinion] + '" — ล้างความคืบหน้าเดิมของแนวทางก่อนหน้า' });
+  }
   o.statusHistory.push({ status:o.status, at: nowIso(), note:'ผู้จัดการแผนกซ่อมบำรุงบันทึกข้อมูลซ่อมบำรุง (วิเคราะห์สาเหตุ/รายการอะไหล่)' });
   await persistOrders();
   toast('บันทึกข้อมูลซ่อมบำรุงเรียบร้อย');
   closeMaintRecord();
+}
+
+/* ============================= ความคืบหน้าตามความคิดเห็นของช่างผู้ตรวจสอบ ============================= */
+function opinionStepsFor(opinion){ return OPINION_STEPS[opinion] || []; }
+/* หมุดที่บันทึกไว้ของ "แนวทางปัจจุบัน" เท่านั้น — ถ้า ผจก.แผนกซ่อมบำรุงเปลี่ยนความคิดเห็น
+   ภายหลัง (เช่นจากซื้ออุปกรณ์มาทำเอง เป็นส่งซ่อม) หมุดของแนวทางเดิมไม่ใช่ความคืบหน้าของ
+   แนวทางใหม่ จึงไม่นำมาแสดง/นับต่อ แต่ยังคงอยู่ในข้อมูลและใน "ลำดับเหตุการณ์" ให้ย้อนดูได้ */
+function opinionProgressOf(o){
+  const p = o.opinionProgress;
+  if(!p || !o.maintRecord || p.opinion !== o.maintRecord.inspectorOpinion) return {};
+  return p.steps || {};
+}
+/* หมุดล่าสุดที่บันทึกแล้ว (ไว้โชว์ป้ายสรุปในรายการแจ้งซ่อม) */
+function latestOpinionStep(o){
+  const steps = opinionStepsFor(o.maintRecord && o.maintRecord.inspectorOpinion);
+  const done = opinionProgressOf(o);
+  let last = null;
+  for(const s of steps){ if(done[s.key]) last = s; else break; }
+  return last;
+}
+/* ขั้นแรกที่ยังไม่ถูกบันทึก = สิ่งที่ใบนี้ "ค้างรออยู่" ตอนนี้ (null = ครบทุกขั้นแล้ว หรือใบนี้
+   ไม่มีแนวทางที่ต้องตามหมุด) */
+function opinionPendingStep(o){
+  const steps = opinionStepsFor(o.maintRecord && o.maintRecord.inspectorOpinion);
+  const done = opinionProgressOf(o);
+  return steps.find(s => !done[s.key]) || null;
+}
+/* ป้าย "รออะไรอยู่" ที่โชว์คู่กับสถานะใบ — หน้างานจริงเกิดได้ทั้งสองแบบ คือช่างเริ่มซ่อมไปก่อน
+   ด้วยอุปกรณ์ที่มีระหว่างรอของมาส่ง กับยังเริ่มไม่ได้เลยเพราะรอของ ทั้งสองแบบถูกต้องทั้งคู่
+   จึงไม่บล็อกปุ่มเริ่มซ่อม แต่ต้องแยกให้ออกว่าใบที่ขึ้น "กำลังซ่อม" อยู่นั้นเดินอยู่จริง
+   หรือค้างรอของ — เดิมสองอย่างนี้หน้าตาเหมือนกันเป๊ะ
+   โชว์เฉพาะใบที่ยังอยู่ในช่วงทำงาน ใบที่ส่งตรวจรับ/ปิดไปแล้วไม่ต้องมาเตือนว่ารอของ */
+function opinionWaitingLabel(o){
+  if(o.status !== 'ASSIGNED' && o.status !== 'IN_PROGRESS') return '';
+  const s = opinionPendingStep(o);
+  return (s && s.pendingLabel) || '';
+}
+/* ใครกดอัปเดตหมุดได้: ผจก.แผนกซ่อมบำรุง (รวม admin ผ่าน hasRole) และช่างที่ถูกมอบหมายใบนี้
+   — สองกลุ่มนี้คือคนที่รู้จริงว่าของส่งออกไปหรือมาส่งแล้ว ผู้แจ้ง/ผู้อนุมัติดูได้อย่างเดียว */
+function canUpdateOpinionProgress(o){
+  if(hasRole('maint')) return true;
+  return state.role === 'tech' && assignedTechs(o).includes(state.myTechName);
+}
+function openOpinionStep(id, key){
+  const o = getOrder(id); if(!o) return;
+  const cur = opinionProgressOf(o)[key];
+  state.ui.opinionStepFor = id;
+  state.ui.opinionStepKey = key;
+  state.ui.opinionStepDate = (cur && cur.date) || todayLocalIso();
+  state.ui.opinionStepNote = (cur && cur.note) || '';
+  render();
+}
+function closeOpinionStep(){
+  state.ui.opinionStepFor = null; state.ui.opinionStepKey = '';
+  state.ui.opinionStepDate = ''; state.ui.opinionStepNote = '';
+  render();
+}
+async function saveOpinionStep(id){
+  const o = getOrder(id); if(!o) return;
+  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
+  if(!canUpdateOpinionProgress(o)){ toast('ท่านไม่มีสิทธิ์อัปเดตความคืบหน้าของใบนี้', true); return; }
+  const opinion = o.maintRecord && o.maintRecord.inspectorOpinion;
+  const steps = opinionStepsFor(opinion);
+  const idx = steps.findIndex(s => s.key === state.ui.opinionStepKey);
+  if(idx < 0){ toast('ไม่พบขั้นตอนที่ต้องการบันทึก', true); return; }
+  const step = steps[idx];
+  const done = { ...opinionProgressOf(o) };
+  // กันหน้าจอที่ค้างอยู่กับข้อมูลเก่ากดข้ามขั้น (เช่นอีกเครื่องเพิ่งย้อนหมุดก่อนหน้าออกไป)
+  if(idx > 0 && !done[steps[idx-1].key]){ toast('กรุณาบันทึก "' + steps[idx-1].label + '" ก่อน', true); return; }
+  const date = state.ui.opinionStepDate;
+  if(!date){ toast('กรุณาระบุ' + step.dateLabel, true); return; }
+  const isEdit = !!done[step.key];
+  const by = state.myName || state.myTechName || (ROLES[state.role] ? ROLES[state.role].label : '');
+  done[step.key] = { date, note: state.ui.opinionStepNote.trim(), by, at: nowIso() };
+  const prevProgress = o.opinionProgress;
+  o.opinionProgress = { opinion, steps: done };
+  const label = INSPECTOR_OPINION_META[opinion] + ' — ' + step.label;
+  o.statusHistory.push({ status:o.status, at: nowIso(),
+    note: (isEdit ? 'แก้ไขความคืบหน้า: ' : 'อัปเดตความคืบหน้า: ') + label + ' (' + fmtDate(date) + ')'
+          + (by ? ' โดย ' + by : '') + (done[step.key].note ? ' — ' + done[step.key].note : '') });
+  const ok = await persistOrders();
+  if(!ok){
+    // เขียนกลับไม่สำเร็จ = ยังไม่มีอะไรถูกบันทึกจริง ต้องคืนค่าในหน้าจอให้ตรงกับของบนเซิร์ฟเวอร์
+    // ไม่งั้นผู้ใช้จะเห็นหมุดขึ้นเขียวทั้งที่ไม่มีใครอื่นเห็น แล้วก็ไม่มีใครได้รับแจ้งเตือนด้วย
+    o.opinionProgress = prevProgress;
+    o.statusHistory.pop();
+    toast('บันทึกความคืบหน้าไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่', true);
+    render();
+    return;
+  }
+  await notifyOpinionStep(o, step, date, done[step.key].note, isEdit);
+  toast((isEdit ? 'แก้ไข' : 'บันทึก') + step.label + 'เรียบร้อย');
+  closeOpinionStep();
+}
+/* แจ้งเตือน "ผู้ที่เกี่ยวข้อง" ของหมุดหนึ่งๆ = ผู้แจ้งซ่อมเจ้าของใบ + ผจก.แผนกซ่อมบำรุง
+   + ช่างทุกคนที่ถูกมอบหมายใบนี้ (ช่างรับผ่าน LINE อย่างเดียว ไม่ต้องมีสิทธิ์ในแอปก็ได้รับ) */
+async function notifyOpinionStep(o, step, date, note, isEdit){
+  const head = (isEdit ? '[แก้ไขข้อมูล] ' : '') + INSPECTOR_OPINION_META[o.opinionProgress.opinion] + ': ';
+  const body = step.notify + ' (' + step.dateLabel + ' ' + fmtDate(date) + ')' + (note ? '\nหมายเหตุ: ' + note : '');
+  // เพิ่งบันทึกหมุดสุดท้ายครบ = ของมาถึง/งานกลับมาแล้ว บอกก้าวถัดไปให้ชัดในข้อความเลย
+  // ข้อความต่างกันตามว่าช่างเริ่มซ่อมไปก่อนแล้วหรือยัง — สองกรณีนี้เกิดจริงทั้งคู่หน้างาน
+  let hint = '', techHint = '';
+  if(!isEdit && !opinionPendingStep(o)){
+    if(o.status === 'ASSIGNED'){
+      hint = '\n✅ พร้อมเริ่มดำเนินการซ่อมแล้ว';
+      techHint = hint + ' — เปิดใบแล้วกด "▶ เริ่มดำเนินการซ่อม"';
+    } else if(o.status === 'IN_PROGRESS'){
+      hint = '\n✅ ของครบแล้ว ช่างดำเนินการซ่อมต่อได้เลย';
+      techHint = hint;
+    }
+  }
+  await notifyOrderRequester(o, head + body + hint);
+  await pushNotification('maint', o.id, o.docNumber, head + body + hint);
+  for(const tech of assignedTechs(o)){
+    await sendLineToTech(tech, '[' + o.docNumber + '] ' + head + body + techHint
+      + '\nเครื่องจักร: ' + o.machineCode + ' — ' + o.machineName + '\n' + orderDeepLink(o.id, 'tech'));
+  }
 }
 async function startRepair(id){
   const o = getOrder(id); if(!o) return;
@@ -2526,6 +2689,16 @@ function renderList(){
   );
   const cards = orders.map(o => {
     const meta = STATUS_META[o.status];
+    // ป้ายสรุปความคืบหน้าของแนวทางที่เลือกไว้ — เห็นได้จากรายการเลยว่าใบไหนติดอยู่ที่รอของ/รอส่งซ่อม
+    // ใบที่ยังค้างรออะไรอยู่ให้ขึ้นป้าย "รอ..." ก่อน (นั่นคือสิ่งที่ต้องตามงาน) ครบแล้วค่อย
+    // แสดงหมุดล่าสุดที่ทำไป — สำคัญกับใบที่ขึ้น "กำลังซ่อม" ทั้งที่จริงๆ ยังรอของอยู่
+    const opWaiting = opinionWaitingLabel(o);
+    const opStep = latestOpinionStep(o);
+    const opPill = opWaiting
+      ? `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd;">⏳ ${escapeHtml(opWaiting)}</span>`
+      : opStep
+        ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${INSPECTOR_OPINION_META[o.maintRecord.inspectorOpinion]}: ${escapeHtml(opStep.doneLabel)}</span>`
+        : '';
     return `
     <div class="order-card" style="border-left-color:${meta.color}">
       <div class="order-top">
@@ -2536,6 +2709,7 @@ function renderList(){
         </div>
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
           ${o.urgent ? `<span class="urgent-pill">🚨 ด่วน</span>` : ''}
+          ${opPill}
           <span class="status-pill" style="color:${meta.color}; background:${meta.bg};">${meta.label}</span>
         </div>
       </div>
@@ -2607,6 +2781,15 @@ function renderDetail(){
     neededDateCell = fmtDate(o.neededDate) + urgentBadge +
       (state.role === 'admin' ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="openEditNeededDate('${o.id}')">✎ แก้ไข</button>` : '');
   }
+
+  // "รออะไรอยู่" — โชว์คู่กับสถานะใบทั้งที่หัวใบ กล่องของช่าง และการ์ดในหน้ารายการ
+  // ตั้งใจไม่ล็อกปุ่มเริ่ม/จบซ่อมไว้กับหมุดพวกนี้ เพราะหน้างานจริงเกิดได้ทั้งสองแบบ:
+  // ช่างเริ่มซ่อมไปก่อนด้วยของที่มีระหว่างรอของมาส่ง กับยังเริ่มไม่ได้เลยเพราะรอของ
+  // สิ่งที่ระบบต้องทำคือ "แยกสองแบบนี้ให้ออก" ไม่ใช่ไปห้ามแบบใดแบบหนึ่ง
+  const waitingLabel = opinionWaitingLabel(o);
+  const waitingNote = waitingLabel
+    ? `<p class="desc" style="margin:0 0 10px; color:#c17f1e;">⏳ ${escapeHtml(waitingLabel)} — ยังเริ่ม/ทำต่อด้วยอุปกรณ์ที่มีอยู่ก่อนได้ ระบบไม่ได้ล็อกปุ่มไว้</p>`
+    : '';
 
   // action box depending on role + status
   let actionBox = '';
@@ -2732,12 +2915,14 @@ function renderDetail(){
     actionBox = `
     <div class="action-box">
       <h4>งานถูกมอบหมายแล้ว — รอเริ่มดำเนินการ</h4>
+      ${waitingNote}
       <div class="order-actions"><button class="btn btn-primary" onclick="startRepair('${o.id}')">▶ เริ่มดำเนินการซ่อม</button></div>
     </div>`;
   } else if(hasRole('tech') && o.status==='IN_PROGRESS' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
     actionBox = `
     <div class="action-box">
       <h4>กำลังซ่อม</h4>
+      ${waitingNote}
       <div class="order-actions"><button class="btn btn-success" onclick="finishRepair('${o.id}')">✓ ซ่อมเสร็จสิ้น</button></div>
     </div>`;
   }
@@ -2811,6 +2996,64 @@ function renderDetail(){
     }
   }
 
+  // ความคืบหน้าตามแนวทางที่เลือกไว้ในบันทึกข้อมูลซ่อมบำรุง — เห็นได้ทุกบทบาท (ผู้แจ้งจะได้เลิกตามถาม)
+  // แต่กดบันทึกได้เฉพาะ ผจก.แผนกซ่อมบำรุง / admin / ช่างที่ถูกมอบหมายใบนี้ (canUpdateOpinionProgress)
+  let opinionProgressSection = '';
+  const opinionKey = o.maintRecord && o.maintRecord.inspectorOpinion;
+  const opSteps = opinionStepsFor(opinionKey);
+  if(opSteps.length){
+    const doneSteps = opinionProgressOf(o);
+    const canUpdate = state.ordersLoaded && canUpdateOpinionProgress(o);
+    const finishedCount = opSteps.filter(s => doneSteps[s.key]).length;
+    const stepRows = opSteps.map((s, i) => {
+      const rec = doneSteps[s.key];
+      const prevDone = i === 0 || !!doneSteps[opSteps[i-1].key];
+      const editing = state.ui.opinionStepFor === o.id && state.ui.opinionStepKey === s.key;
+      const form = editing ? `
+        <div class="reject-box">
+          <div class="field" style="margin-bottom:10px;">
+            <label class="field-label">${s.dateLabel} <span class="req-star">*</span></label>
+            <input type="date" class="input" value="${state.ui.opinionStepDate}" onchange="state.ui.opinionStepDate=this.value">
+          </div>
+          <label class="field-label">หมายเหตุ (ถ้ามี)</label>
+          <textarea class="input" oninput="state.ui.opinionStepNote=this.value" placeholder="เช่น ชื่อร้าน/ผู้รับงาน เลขที่ใบสั่งซื้อ...">${escapeHtml(state.ui.opinionStepNote)}</textarea>
+          <div class="order-actions">
+            <button class="btn btn-primary btn-sm" onclick="saveOpinionStep('${o.id}')">${rec ? 'บันทึกการแก้ไข' : 'ยืนยันและแจ้งเตือน'}</button>
+            <button class="btn btn-outline btn-sm" onclick="closeOpinionStep()">ยกเลิก</button>
+          </div>
+        </div>` : '';
+      let statusCell, actionCell = '';
+      if(rec){
+        statusCell = `<span class="status-pill" style="color:#2F8F6B; background:#e6f3ee;">✓ ${escapeHtml(s.doneLabel)}</span>
+          <span style="margin-left:8px;">${fmtDate(rec.date)}</span>
+          ${rec.by ? `<span style="color:var(--slate);"> • บันทึกโดย ${escapeHtml(rec.by)}</span>` : ''}
+          ${rec.note ? `<div style="margin-top:2px; color:var(--slate);">หมายเหตุ: ${escapeHtml(rec.note)}</div>` : ''}`;
+        if(canUpdate && !editing) actionCell = `<button class="btn btn-outline btn-sm" onclick="openOpinionStep('${o.id}','${s.key}')">✎ แก้ไข</button>`;
+      } else if(prevDone){
+        statusCell = `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd;">รอบันทึก</span>`;
+        if(canUpdate && !editing) actionCell = `<button class="btn btn-primary btn-sm" onclick="openOpinionStep('${o.id}','${s.key}')">${s.btn}</button>`;
+      } else {
+        statusCell = `<span class="status-pill" style="color:#6b7785; background:#eef0f2;">รอขั้นตอนก่อนหน้า</span>`;
+      }
+      return `
+        <div class="kv" style="padding-bottom:10px; ${i < opSteps.length-1 ? 'border-bottom:1px solid var(--line);' : 'margin-bottom:0;'}">
+          <div class="k">ขั้นที่ ${i+1} — ${escapeHtml(s.label)}</div>
+          <div class="v">${statusCell}</div>
+          ${actionCell ? `<div class="order-actions" style="margin-top:8px;">${actionCell}</div>` : ''}
+          ${form}
+        </div>`;
+    }).join('');
+    opinionProgressSection = `
+    <div class="action-box">
+      <h4>ความคืบหน้า: ${INSPECTOR_OPINION_META[opinionKey]} (${finishedCount}/${opSteps.length})</h4>
+      <p class="desc" style="margin:0 0 12px; font-size:12.5px; color:var(--slate);">
+        ${canUpdate ? 'ทุกครั้งที่บันทึก ระบบจะแจ้งเตือนผู้แจ้งซ่อม ผู้จัดการแผนกซ่อมบำรุง และช่างผู้รับผิดชอบโดยอัตโนมัติ'
+                    : 'อัปเดตได้โดยผู้จัดการแผนกซ่อมบำรุงหรือช่างผู้รับผิดชอบใบนี้'}
+      </p>
+      ${stepRows}
+    </div>`;
+  }
+
   return `
   <button class="back-link" onclick="backToList()">← กลับไปรายการแจ้งซ่อม</button>
   <div class="detail-head">
@@ -2818,7 +3061,10 @@ function renderDetail(){
       <span class="doc-chip">${o.docNumber}</span>
       <h2 class="view-title" style="display:inline-block; margin-left:10px;">แผนก ${o.department}</h2>
     </div>
-    <span class="status-pill" style="color:${meta.color}; background:${meta.bg}; font-size:13px; padding:6px 14px;">${meta.label}</span>
+    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+      ${waitingLabel ? `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd; font-size:13px; padding:6px 14px;">⏳ ${escapeHtml(waitingLabel)}</span>` : ''}
+      <span class="status-pill" style="color:${meta.color}; background:${meta.bg}; font-size:13px; padding:6px 14px;">${meta.label}</span>
+    </div>
   </div>
   <div class="card">
     <div class="grid-2">
@@ -2839,6 +3085,7 @@ function renderDetail(){
     ${gallery}
     ${actionBox}
     ${maintRecordSection}
+    ${opinionProgressSection}
     ${o.verificationHistory && o.verificationHistory.length ? `
     <div class="kv" style="margin-top:16px;"><div class="k">ประวัติการตรวจสอบของผู้แจ้ง (ครั้งที่ไม่ผ่าน)</div>
       <div class="timeline">

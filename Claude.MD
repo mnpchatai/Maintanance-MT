@@ -774,6 +774,74 @@ editable-any-time-after-assignment "บันทึกข้อมูลซ่�
 `INSPECTOR_OPINION_META` — and a `parts[]` table of
 name/qty/unit/price/shop/note) that `maint` fills in and every role can
 view read-only once a job is assigned.
+Following through on the ความคิดเห็นของช่างผู้ตรวจสอบ — picking one of the
+four `INSPECTOR_OPINION_META` options used to be the end of it: the record
+said "ซื้ออุปกรณ์มาทำเอง" and nothing anywhere said whether the parts had
+been ordered, let alone delivered, so the requester had to go and ask.
+Each option now carries its own ordered list of milestones (`OPINION_STEPS`
+in `index.html`), rendered under the maintenance record as a
+"ความคืบหน้า: <แนวทาง> (n/m)" box on the order detail page:
+* `send_repair` → เริ่มส่งซ่อม, ซ่อมเสร็จ/รับของกลับ
+* `external` → นัดหมายช่างภายนอก, ช่างเข้าดำเนินการ, ช่างซ่อมเสร็จ
+* `self_repair` → เริ่มลงมือซ่อมเอง, ซ่อมเองเสร็จ
+* `buy_parts` → สั่งของเรียบร้อย, ของมาส่งเรียบร้อย
+Each milestone is one button that opens a date (defaulting to today via
+`todayLocalIso()` — `toISOString()` is UTC and would offer "yesterday"
+between midnight and 07:00 Thai time) plus an optional note, and saves to
+`order.opinionProgress` = `{ opinion, steps:{ <key>:{date,note,by,at} } }`
+(`saveOpinionStep()`). Milestones must be recorded in order — the button for
+a later step doesn't appear until the previous one is recorded, and
+`saveOpinionStep()` re-checks that server-side of the UI so a stale tab
+can't skip one.
+Every save fires `notifyOpinionStep()`: the order's own requester
+(`notifyOrderRequester`), the `maint` role (`pushNotification('maint',…)`)
+and every assigned technician by name (`sendLineToTech`) — the three
+parties who need to know that the machine went out or the parts arrived.
+Re-saving an already-recorded milestone is a correction: it keeps the same
+step, appends a second `statusHistory` line and prefixes the notification
+with `[แก้ไขข้อมูล]` rather than pretending it is new news.
+Two deliberate constraints. First, these milestones never touch
+`order.status` — the approval/assignment/verify path
+(`ASSIGNED` → `IN_PROGRESS` → `PENDING_VERIFY` → `DONE`) is unchanged and
+these run alongside it, so nothing in the Apps Script mirror's status
+dropdown needs updating for this. Second, `opinionProgress` is stamped with
+the `opinion` it was recorded under and read through `opinionProgressOf()`,
+which returns `{}` when that no longer matches `maintRecord.inspectorOpinion`
+— if `maint` switches แนวทาง later, `saveMaintRecord()` clears the progress
+and logs the switch to the timeline instead of showing "สั่งของแล้ว" against
+a plan that no longer involves buying anything. Orders written before this
+change have no `opinionProgress` key at all and read as "nothing recorded".
+Who may press the buttons: `maint` (so `admin` too, via `hasRole`) and a
+technician assigned to that order (`canUpdateOpinionProgress()`). Everyone
+else sees the same box read-only.
+Waiting on parts vs. actually being repaired — these milestones deliberately
+do NOT gate the technician's "▶ เริ่มดำเนินการซ่อม" / "✓ ซ่อมเสร็จสิ้น"
+buttons, because both real-world cases happen: a technician starts on what
+they have while the ordered parts are still in transit, and a technician who
+genuinely cannot start until the parts land. Blocking the button would break
+the first case, and it is the wrong lever anyway — the person who records the
+milestone (`maint`) is often not the person holding the spanner, so a
+forgotten milestone would stop real work. What the system owes is telling the
+two cases apart, which it previously could not: an order sitting at
+"กำลังซ่อม" looked identical whether the job was moving or stalled waiting on
+a delivery.
+So each step carries a `pendingLabel` — what the order is waiting for while
+that step is unrecorded (`self_repair` has none; nothing external is
+pending). `opinionPendingStep()` returns the first unrecorded step and
+`opinionWaitingLabel()` turns it into an amber "⏳ รออุปกรณ์มาส่ง" /
+"⏳ รอของกลับจากที่ส่งซ่อม" pill, shown next to the status on the detail head,
+inside the technician's own action box (with a line stating outright that the
+button is not locked), and on the list card, where it takes priority over the
+blue latest-milestone pill (`latestOpinionStep()`) — what a job is stuck on
+matters more than what it has finished. It is scoped to `ASSIGNED` and
+`IN_PROGRESS` only: an order already out for verification or closed should
+not nag about parts.
+When the last milestone of a plan is recorded, `notifyOpinionStep()` appends
+the next move, worded from the order's own status — `ASSIGNED` gets
+"✅ พร้อมเริ่มดำเนินการซ่อมแล้ว" (and the technician alone is told to open the
+order and press ▶), `IN_PROGRESS` gets "✅ ของครบแล้ว ช่างดำเนินการซ่อมต่อได้เลย".
+Corrections to an already-recorded milestone skip the hint entirely rather
+than re-announcing that the parts arrived.
 Finishing a repair no longer closes the order directly. `tech`
 pressing "ซ่อมเสร็จสิ้น" now moves the order to a new status
 `PENDING_VERIFY` ("รอผู้แจ้งตรวจสอบผลการซ่อม") instead of `DONE`. The
