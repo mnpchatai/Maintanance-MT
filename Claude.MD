@@ -295,11 +295,55 @@ The overlay markup lives outside `#app` (next to `#toastWrap`) on purpose —
 constraint (never `exact`, which would throw on a camera that can't do it):
 the `getUserMedia` default is 640x480, too coarse to read a machine's
 nameplate. It needs HTTPS, which GitHub Pages gives us.
-Polling: `pollForUpdates()` runs every 7s via `setInterval`, re-fetches
-`config`/`orders`/`notifications`, and only calls `render()` if something
-actually changed (JSON-string diff) — this is how edits made directly in
-the Sheet (departments/machines/technicians) show up in the browser
-without a manual reload.
+Polling: `pollForUpdates()` re-fetches `config`/`orders`/`notifications`/
+`accessRequests` and only calls `render()` if something actually changed
+(JSON-string diff) — this is how edits made directly in the Sheet
+(departments/machines/technicians) show up in the browser without a manual
+reload.
+It is driven by `startPolling()`, a `setTimeout` chain, **not**
+`setInterval`. This matters: every request is one Apps Script execution,
+and a Web App deployed *Execute as: Me* runs them all under the owner's
+single concurrency budget, so excess requests queue. The old
+`setInterval(pollForUpdates, 3000)` fired 4 requests every 3s per open
+tab regardless of whether the previous round had returned — a handful of
+tabs left open filled the queue faster than it drained, and anyone
+*opening* the app then waited behind it (this was the "เปิดแอปรอ 2 นาที"
+symptom). Three properties now keep that from recurring, and none of them
+should be removed without a replacement:
+- `pollInFlight` — a round cannot start until the previous one finished,
+  so overlap is structurally impossible.
+- adaptive backoff — the next delay is ~4× how long the last round took,
+  clamped to `POLL_MIN`..`POLL_MAX` (15s–90s). A slow server means a long
+  queue; polling harder makes it worse, so the client backs off and
+  recovers on its own.
+- `document.hidden` — hidden tabs poll not at all. `visibilitychange`
+  resets the delay and polls immediately on return, so the user never
+  sees stale data because of it.
+`recheckAccess()` (the guest screen's approval watcher) follows the same
+in-flight + hidden rules for the same reason.
+
+Local snapshot: `saveSnapshot()`/`applySnapshot()` keep the last good
+`config`/`orders`/`notifications`/`counters` plus the resolved roles in
+`localStorage` under `mtSnapshot`, so `init()` paints the full app from
+disk in ~100ms instead of waiting on the network. The server's answer
+always wins: `resolveAccess()` runs regardless, and if it says the device
+has no roles the snapshot is cleared and the page reloads into the guest
+screen. The snapshot is bound to `deviceId` + `APP_VERSION` and expires
+after 7 days.
+The snapshot deliberately does **not** set `state.loaded` or
+`state.ordersLoaded` — those two flags mean "fetched from the server this
+session" and are what gate *writing back* (`persistOrders()`, editing
+config on the Settings page). Booting from cache must never unlock a
+write, or a stale copy gets mirrored over live Sheet data. Use
+`configReady()` (server **or** cache) for anything that merely *displays*
+config, and `state.loaded` for anything that edits it.
+Related invariant, learned the hard way: `storeGet` returns `undefined`
+on a failed fetch and `null` when the key genuinely has no value.
+`loadEssential()`/`loadBackground()` must only set `state.loaded`/
+`state.ordersLoaded` in the `!== undefined` case. Both previously set them
+unconditionally, so a single dropped request left `state.orders = []` and
+writes unlocked — one button press then mirrored an empty array over every
+saved order.
 CORS gotcha: all `fetch` calls to Apps Script use
 `Content-Type: text/plain;charset=utf-8`, never `application/json`.
 Apps Script Web Apps don't implement `doOptions`, so a JSON content-type
