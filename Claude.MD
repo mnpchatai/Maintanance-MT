@@ -609,6 +609,24 @@ likely a manual edit while exploring the Sheet UI, not a script bug).
 Recovered via File → Version history → Restore. Consider protecting the
 `KV` tab (Data → Protect sheets and ranges) if this becomes a recurring
 risk.
+Relay version handshake (3 Sep 2026)
+`docs/line-relay.gs` is a copy-paste master, not running code — every edit to
+it is inert until it is pasted into the "LineOA MT" editor and redeployed as a
+**New version**. That gap silently broke every notification: the app sent
+`userIds`, the deployed relay was older and ignored them, and the app reported
+the guess "relay ไม่พบผู้รับ" for what was really a stale deployment. There is
+now a handshake: `RELAY_VERSION` in `docs/line-relay.gs` must equal
+`RELAY_CODE_VERSION` in `index.html`, the relay echoes `version` on every
+reply, and the app warns loudly (send log, `runLineSendTest`, `runLineRelayTest`)
+whenever they differ. **Bump both together in the same commit.**
+The relay also returns `targets` and `errors[{userId, code, message}]` now, and
+`pushTo_` returns `{ok, code, message}` instead of a bare boolean, so the app can
+show the chain "แอปหาผู้รับได้ N → relay หาได้ M → LINE รับไป K" plus LINE's own
+HTTP code. Never collapse a failure back into a single guessed sentence — the
+four causes behind `sent:0` (stale relay, bad token, bad/unfriended `userId`,
+no recipients at all) are fixed in four different places. Full runbook:
+`docs/line-notify-not-sending.md`.
+
 Where things stood at hand-off
 Access control was rebuilt off LINE entirely — see "Login & access
 control" under `index.html` above for the whole design and the reasons.

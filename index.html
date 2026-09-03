@@ -433,7 +433,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-02.4';
+const APP_VERSION = '2026-09-03.1';
 
 async function storeGet(key){
   try{
@@ -590,7 +590,15 @@ async function runLineRelayTest(){
       ? '✅ LINE_CHANNEL_ACCESS_TOKEN ใช้งานได้'
       : `❌ token ใช้ไม่ได้ (HTTP ${c.accessToken.httpCode || '-'}) — ${c.accessToken.fix || ''}`);
 
-    if(data.ok && c.usersSheet && c.usersSheet.ok && c.usersSheet.rows === 0){
+    // เวอร์ชันของโค้ดที่ deploy อยู่จริง — ตรวจก่อนอย่างอื่นเสมอ เพราะถ้าโค้ดเป็นของเก่า
+    // ผลตรวจข้ออื่นจะดูปกติดีทั้งที่การส่งจริงพังอยู่ (relay เก่าไม่อ่าน userIds ที่แอปส่งไปให้)
+    lines.push(data.version === RELAY_CODE_VERSION
+      ? `✅ โค้ด relay เป็นเวอร์ชันล่าสุด (${data.version})`
+      : `❌ โค้ด relay เป็นเวอร์ชัน ${data.version || 'เก่ามาก (ไม่บอกเวอร์ชัน)'} แต่แอปรุ่นนี้คู่กับ ${RELAY_CODE_VERSION} — ${RELAY_UPDATE_STEPS}`);
+
+    if(data.version !== RELAY_CODE_VERSION){
+      verdict = `❌ โค้ดใน Apps Script เป็นคนละเวอร์ชันกับแอป — ${RELAY_UPDATE_STEPS}`;
+    } else if(data.ok && c.usersSheet && c.usersSheet.ok && c.usersSheet.rows === 0){
       verdict = '⚠️ relay ตั้งค่าถูกหมดแล้ว แต่ยังไม่มีใครถูกบันทึกเลยสักคน — แปลว่า LINE ยิง webhook มาไม่ถึง relay ให้ไปตั้ง Webhook URL + เปิดสวิตช์ "Use webhook" ที่ developers.line.biz → Messaging API และปิดการตอบกลับอัตโนมัติใน LINE OA Manager';
     } else if(data.ok){
       verdict = '✅ relay ปกติดีทุกข้อ — ถ้ายังมีคนทักแล้วไม่ขึ้น ให้เปิดแท็บ "Relay Log" ในชีตเพื่อดูว่าตกที่ขั้นไหน';
@@ -616,8 +624,11 @@ async function runLineSendTest(){
   if(res.ok === null) verdict = '⚠️ ส่งคำขอออกไปแล้วแต่อ่านผลตอบกลับไม่ได้ — ให้ดูที่มือถือว่าข้อความเข้าหรือไม่ (' + (res.note || '') + ')';
   else if(res.ok) verdict = `✅ relay ส่งสำเร็จ ${res.sent} ข้อความ — ตรวจที่ LINE ของผู้รับได้เลย`;
   else verdict = '❌ ไม่ถึงใครเลย — ' + (res.note || 'relay ไม่พบผู้รับสำหรับบทบาทนี้') + (ids.length ? '' : `\nแอปหา LINE ของบทบาท "${role}" ไม่เจอสักคน ให้ผูก LINE ให้ผู้ใช้ในหัวข้อ "คำขอสิทธิ์เข้าใช้งาน" ด้านบน หรือเพิ่มแถว (บทบาท=${role}, userId) ในแท็บ "แจ้งเตือน LINE - ผู้รับ" ของชีต`);
-  state.ui.testSend = { at: Date.now(), role, verdict, appIds: ids.length };
+  state.ui.testSend = { at: Date.now(), role, verdict, appIds: ids.length, sent: res.sent, targets: res.targets };
   render();
+  // ส่งไม่ออก = ต่อด้วยการตรวจสุขภาพ relay ให้เลย ไม่ต้องให้ผู้ใช้ไปกดปุ่มที่สองเอง
+  // (คำตอบของ selftest จะบอกว่าเป็นที่ชีต, ที่ token หรือที่เวอร์ชันโค้ดของ relay)
+  if(res.ok === false) await runLineRelayTest();
 }
 /* ผูกเครื่องนี้กับรหัสประจำเครื่องเดิมที่ผู้ดูแลใส่ไว้ในชีตแล้ว — ทางออกเมื่อรหัสเดิมหายไป
    (เปลี่ยนเบราว์เซอร์/เครื่อง, ล้างข้อมูลเว็บ, หรือเบราว์เซอร์เก็บรหัสไม่ได้) จะได้ไม่ต้องไล่เพิ่ม
@@ -1135,16 +1146,61 @@ function logLineSend(entry){
   state.lineSendLog.unshift(Object.assign({ at: Date.now() }, entry));
   if(state.lineSendLog.length > 30) state.lineSendLog.length = 30;
 }
-/* ยิง payload ไปที่ relay แล้วแปลผลกลับมาเป็น { ok, sent, note }
+/* เวอร์ชันของโค้ด relay (docs/line-relay.gs) ที่แอปรุ่นนี้คู่กัน — relay ตอบ version กลับมาทุกคำขอ
+   ถ้าไม่ตรงหรือไม่มีเลย แปลว่าโค้ดใน Apps Script ยังเป็นของเก่า (ไฟล์ใน repo ไม่ได้รันเอง ต้อง
+   คัดลอกไปวางแล้ว Deploy ใหม่ทุกครั้ง) — นี่คือสาเหตุอันดับหนึ่งของอาการ
+   "แอปเห็นผู้รับ 2 คน แต่ relay ตอบว่าไม่พบผู้รับ" ซึ่งเดิมแอปไม่มีทางรู้เลย */
+const RELAY_CODE_VERSION = '2026-09-03.1';
+const RELAY_UPDATE_STEPS = 'เปิด Apps Script โปรเจกต์ "LineOA MT" → วางโค้ดจากไฟล์ docs/line-relay.gs ทับทั้งไฟล์ → Deploy → Manage deployments → ✏️ → Version: New version → Deploy';
+/* แปลรหัสตอบกลับของ LINE Messaging API เป็นสาเหตุ + วิธีแก้ที่ลงมือทำได้จริง */
+function lineErrorHint(code){
+  const c = Number(code || 0);
+  if(c === 401) return 'LINE_CHANNEL_ACCESS_TOKEN ผิดหรือหมดอายุ — ออก token ใหม่ที่ developers.line.biz → ช่อง Messaging API → Channel access token แล้ววางที่ Apps Script → Project Settings → Script properties';
+  if(c === 403) return 'channel นี้ส่งข้อความ push ไม่ได้ — ตรวจว่า token เป็นของ LINE OA ตัวเดียวกับที่ผู้รับเพิ่มเป็นเพื่อน และบัญชียังไม่ถูกระงับ';
+  if(c === 400) return 'userId ของผู้รับไม่ถูกต้อง หรือผู้รับยังไม่ได้เพิ่ม LINE OA นี้เป็นเพื่อน (หรือบล็อกไว้) — ให้เจ้าตัวทักหา OA ก่อน แล้วเอา userId จากแท็บ "LINE Users" ในชีตมาผูกให้ที่หัวข้อคำขอสิทธิ์';
+  if(c === 429) return 'ส่งข้อความครบโควตาของบัญชี LINE OA เดือนนี้แล้ว — ตรวจโควตาที่ LINE OA Manager';
+  if(c >= 500) return 'ฝั่ง LINE ขัดข้องชั่วคราว ลองส่งใหม่อีกครั้ง';
+  return '';
+}
+/* สรุปคำตอบของ relay เป็นข้อความเดียวที่บอกตรงๆ ว่า "ตกที่ขั้นไหน"
+   เดิมทุกความล้มเหลวถูกเหมารวมเป็น "relay ไม่พบผู้รับสำหรับการแจ้งเตือนนี้" ซึ่งไม่จริงเสมอไป
+   และพาไปแก้ผิดจุดทุกครั้ง (ไปไล่เพิ่มผู้รับ ทั้งที่ตัวปัญหาคือ token หรือโค้ด relay เก่า) */
+function relayResultNote({ data, sent, targets, errors, wanted }){
+  const parts = [];
+  // เวอร์ชันไม่ตรงคือสาเหตุที่ต้องบอกก่อนเพื่อนเสมอ เพราะทำให้ทุกอาการอื่นอธิบายผิดได้หมด
+  const versionBad = data.version !== RELAY_CODE_VERSION;
+  if(versionBad){
+    parts.push(`โค้ด relay ใน Apps Script เป็น${data.version ? 'เวอร์ชัน ' + data.version : 'เวอร์ชันเก่า (ไม่บอกเวอร์ชันกลับมา)'} แต่แอปรุ่นนี้คู่กับ ${RELAY_CODE_VERSION} — ${RELAY_UPDATE_STEPS}`);
+  }
+  if(data.error) parts.push('relay ปฏิเสธคำขอ: ' + data.error);
+  else if(!sent){
+    if(targets > 0){
+      // relay หาคนเจอแล้ว แต่ LINE ไม่รับ — สาเหตุอยู่ที่ token/ตัว userId/โควตา ไม่ใช่ที่รายชื่อผู้รับ
+      const first = errors[0] || {};
+      parts.push(`relay หาผู้รับได้ ${targets} คน แต่ LINE ไม่ยอมส่งสักคน` +
+        (first.code ? ` (LINE ตอบ HTTP ${first.code}${first.message ? ': ' + first.message : ''})` : ''));
+      const hint = lineErrorHint(first.code);
+      if(hint) parts.push('วิธีแก้: ' + hint);
+    } else if(wanted > 0){
+      if(!versionBad) parts.push(`แอปส่งรายชื่อผู้รับไปให้ ${wanted} คน แต่ relay ตอบว่าไม่มีผู้รับเลย — ให้ตรวจโค้ด relay ว่าอ่านฟิลด์ userIds จริง (${RELAY_UPDATE_STEPS})`);
+    } else {
+      parts.push('ไม่พบผู้รับของการแจ้งเตือนนี้ ทั้งในแอปและในแท็บ "แจ้งเตือน LINE - ผู้รับ" ของชีต');
+    }
+  }
+  if(data.note) parts.push(data.note);
+  return parts.join(' • ');
+}
+/* ยิง payload ไปที่ relay แล้วแปลผลกลับมาเป็น { ok, sent, targets, errors, note }
    ok === null หมายถึง "ส่งออกไปแล้วแต่อ่านผลไม่ได้" (เบราว์เซอร์บล็อกการอ่าน response ข้ามโดเมน)
    ซึ่งไม่ใช่ความล้มเหลว — คำขอถึง Apps Script ไปแล้ว จึงห้ามรายงานว่าส่งไม่สำเร็จ */
 async function postToRelay(payload, label){
   const url = lineRelayUrl(payload.role);
+  const wanted = (payload.userIds || []).length;   // จำนวนผู้รับที่ "แอป" หาเจอและส่งไปให้ relay
   if(!url){
     logLineSend({ label, ok:false, sent:0, note:'ยังไม่ได้ตั้งค่า URL ของ relay' });
     return { ok:false, sent:0, note:'ยังไม่ได้ตั้งค่า URL ของ relay' };
   }
-  const body = JSON.stringify(Object.assign({ at: nowIso() }, payload));
+  const body = JSON.stringify(Object.assign({ at: nowIso(), appVersion: APP_VERSION }, payload));
   try{
     const res = await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body });
     const text = await res.text();
@@ -1152,13 +1208,17 @@ async function postToRelay(payload, label){
     try{ data = JSON.parse(text); }catch(e){ /* relay ตอบมาไม่ใช่ JSON */ }
     if(!data){
       const note = 'relay ตอบกลับมาแต่ไม่ใช่ JSON (HTTP ' + res.status + ') — มักแปลว่าโดนเด้งไปหน้า login ของ Google ให้ตั้ง Deploy → Who has access = Anyone';
-      logLineSend({ label, ok:false, sent:0, note, raw:text.slice(0,200) });
+      logLineSend({ label, ok:false, sent:0, wanted, note, raw:text.slice(0,300) });
       return { ok:false, sent:0, note };
     }
     const sent = Number(data.sent || 0);
-    const note = data.note || (sent ? '' : 'relay ไม่พบผู้รับสำหรับการแจ้งเตือนนี้');
-    logLineSend({ label, ok: sent > 0, sent, targets: Number(data.targets || 0), note });
-    return { ok: sent > 0, sent, note };
+    const targets = Number(data.targets || 0);
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const note = relayResultNote({ data, sent, targets, errors, wanted });
+    // เก็บคำตอบดิบไว้ด้วยเมื่อส่งไม่ออก — เวลาสาเหตุอยู่นอกเหนือที่แปลไว้ จะได้อ่านของจริงได้เลย
+    logLineSend({ label, ok: sent > 0, sent, targets, wanted, errors,
+      relayVersion: data.version || '', note, raw: sent ? '' : text.slice(0, 300) });
+    return { ok: sent > 0, sent, targets, errors, note };
   }catch(e){
     // fetch พังหลังคำขอออกไปแล้วได้ (CORS ตอน redirect ของ Apps Script) — นับเป็น "ไม่ทราบผล"
     const note = 'ส่งคำขอออกไปแล้วแต่อ่านผลตอบกลับไม่ได้: ' + String((e && e.message) || e);
@@ -1704,6 +1764,8 @@ async function approveFm(id, note){
   o.statusHistory.push({ status:'PENDING_GM', at: nowIso(), note:'ผู้จัดการโรงงานอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
   await persistOrders();
   await pushNotification('gm', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอการอนุมัติของท่าน`);
+  // ผู้แจ้งซ่อมต้องรู้ความคืบหน้าของใบตัวเองทุกขั้น ไม่ใช่รู้เฉพาะตอนถูกปฏิเสธ
+  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอผู้จัดการทั่วไปอนุมัติ`);
   toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการทั่วไป');
   closeActionBox();
 }
@@ -1736,6 +1798,7 @@ async function approveGm(id, note){
   o.statusHistory.push({ status:'PENDING_ASSIGN', at: nowIso(), note:'ผู้จัดการทั่วไปอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
   await persistOrders();
   await pushNotification('maint', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติครบแล้ว กรุณามอบหมายช่างผู้รับผิดชอบ`);
+  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการทั่วไปแล้ว รอผู้จัดการแผนกซ่อมบำรุงมอบหมายช่าง`);
   toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการแผนกซ่อมบำรุง');
   closeActionBox();
 }
@@ -1860,6 +1923,7 @@ async function finishRepair(id){
   o.statusHistory.push({ status:'PENDING_VERIFY', at: nowIso(), note:'ซ่อมเสร็จสิ้น รอผู้แจ้งซ่อมตรวจสอบการใช้งาน' });
   await persistOrders();
   await notifyOrderRequester(o, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`);
+  await pushNotification('maint', id, o.docNumber, `ช่างแจ้งซ่อมเสร็จแล้ว (${assignedTechs(o).join(', ') || 'ไม่ระบุช่าง'}) รอผู้แจ้งซ่อมตรวจรับ`);
   toast('อัปเดตสถานะ: รอผู้แจ้งตรวจสอบผลการซ่อม');
   render();
 }
@@ -2696,7 +2760,14 @@ function renderSettings(){
     : `<table class="mini"><tr><th>เวลา</th><th>รายการ</th><th>ผล</th></tr>${log.map(e => {
         const t = new Date(e.at).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
         const mark = e.ok === true ? `✅ ส่ง ${e.sent} ข้อความ` : (e.ok === null ? '⚠️ ไม่ทราบผล' : '❌ ไม่ถึงใคร');
-        return `<tr><td class="mono">${t}</td><td>${escapeHtml(e.label || '-')}</td><td>${mark}${e.note ? `<br><span style="color:var(--slate); font-size:11.5px;">${escapeHtml(e.note)}</span>` : ''}</td></tr>`;
+        // ตัวเลขทีละขั้น: แอปหาผู้รับได้กี่คน → relay หาได้กี่คน → LINE รับไปกี่ข้อความ
+        // ดูปุ๊บรู้ทันทีว่าขาดตอนที่ขั้นไหน โดยไม่ต้องเปิด Apps Script หรือแท็บ Relay Log
+        const chain = (e.wanted != null || e.targets != null)
+          ? `<br><span style="color:var(--slate); font-size:11.5px;">แอปหาผู้รับได้ ${e.wanted == null ? '-' : e.wanted} คน → relay หาได้ ${e.targets == null ? '-' : e.targets} คน → LINE รับไป ${e.sent == null ? '-' : e.sent} ข้อความ${e.relayVersion ? ' · relay v' + escapeHtml(e.relayVersion) : ''}</span>` : '';
+        const errs = (e.errors || []).length
+          ? `<br><span style="color:var(--danger); font-size:11.5px;">${e.errors.map(x => `${escapeHtml(x.userId || '')} → HTTP ${escapeHtml(String(x.code || '-'))} ${escapeHtml(x.message || '')}`).join('<br>')}</span>` : '';
+        const raw = e.raw ? `<br><span class="mono" style="color:var(--slate-light); font-size:11px; word-break:break-all;">${escapeHtml(e.raw)}</span>` : '';
+        return `<tr><td class="mono">${t}</td><td>${escapeHtml(e.label || '-')}</td><td>${mark}${e.note ? `<br><span style="color:var(--slate); font-size:11.5px;">${escapeHtml(e.note)}</span>` : ''}${chain}${errs}${raw}</td></tr>`;
       }).join('')}</table>`;
   const lt = state.ui.lineTest;
   const lineTestBox = !lt ? '' : (lt.running ? `<div class="auth-note">กำลังทดสอบ relay...</div>` : `
