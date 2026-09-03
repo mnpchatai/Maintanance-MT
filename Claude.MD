@@ -344,6 +344,33 @@ on a failed fetch and `null` when the key genuinely has no value.
 unconditionally, so a single dropped request left `state.orders = []` and
 writes unlocked — one button press then mirrored an empty array over every
 saved order.
+
+Deep links from LINE notifications (`?order=<id>&role=<role>`, and
+`?view=settings` for the new-access-request alert) must be read at
+*script-evaluation* time, not inside `startApp()`. `DEEP_LINK` and the
+`state.view`/`state.selectedOrderId` it pins are module-level statements
+that run before anything can call `render()`, because `state.view`
+defaults to `'new'` — the blank repair-request form. When the parse lived
+inside `startApp()` it ran only after `resolveAccess()` had returned, so
+every user who tapped a LINE link watched that unrelated form for the
+length of an Apps Script round trip (about five seconds in practice)
+before the screen jumped to the order they had actually asked for.
+Three rules keep that path honest:
+- `deepLinkOrderPromise` fires `getOrderById()` at script-evaluation time
+  too, so the single-order fetch runs *beside* the auth check instead of
+  queueing behind it.
+- `openDetail()` paints before awaiting `photos:<id>`, and `startApp()`
+  does not `await` it. Otherwise the detail screen waits on a third
+  serial round trip and `loadBackground()` waits behind that.
+- `openDetail()` is called even when the single-order fetch fails.
+  `renderDetail()` shows "กำลังเปิดใบแจ้งซ่อม…" while `!state.ordersLoaded`
+  rather than "ไม่พบใบแจ้งซ่อมนี้", so `loadBackground()` can still fill it
+  in. The old `else render()` branch stranded those users on the form.
+`DEEP_LINK` strips the query string from the address bar as soon as it
+reads it, so the no-roles path above must reload with
+`location.replace(location.pathname + DEEP_LINK.search)` — a bare
+`location.reload()` there drops the link and lands the user on the app's
+front page instead of the order they tapped.
 CORS gotcha: all `fetch` calls to Apps Script use
 `Content-Type: text/plain;charset=utf-8`, never `application/json`.
 Apps Script Web Apps don't implement `doOptions`, so a JSON content-type
