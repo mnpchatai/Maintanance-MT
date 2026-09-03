@@ -502,7 +502,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.4';
+const APP_VERSION = '2026-09-03.5';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1963,13 +1963,21 @@ async function openDetail(id){
   state.view = 'detail';
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote='';
   state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
-  const photos = await storeGet('photos:'+id);
-  state.detailPhotos = photos || [];
+  state.detailPhotos = [];   // ล้างรูปของใบก่อนหน้าก่อนเสมอ ไม่งั้นจะค้างโผล่บนใบใหม่ชั่วครู่
   // mark related notifications read for current role (admin: all roles' notifications for this order)
   let changed = false;
   state.notifications.forEach(n => { if(n.orderId === id && !n.read && notifIsMine(n)){ n.read = true; changed = true; } });
-  if(changed) await storeSet('notifications', state.notifications);
+  // วาดหน้ารายละเอียด "ทันทีที่รู้ว่าจะเปิดใบไหน" แล้วค่อยเติมรูปแนบตามมาทีหลัง — เดิม render() อยู่
+  // หลัง await storeGet('photos:') จึงต้องรอคิว Apps Script อีกหนึ่งรอบก่อนหน้าจอจะยอมเปลี่ยน
+  // ซึ่งบนเส้นทาง "กดลิงก์จากไลน์" คือรอบที่สามต่อกัน (เช็คสิทธิ์ → ขอใบ → ขอรูป) ผู้ใช้จึงค้างอยู่
+  // หน้าที่ไม่เกี่ยวข้องหลายวินาทีกว่าจะถึงใบที่ตั้งใจเปิด
   render();
+  if(changed) storeSet('notifications', state.notifications);   // ไม่ต้องรอ — ไม่มีใครใช้ผลลัพธ์ต่อ
+  const photos = await storeGet('photos:'+id);
+  // ผู้ใช้อาจกดออกจากใบนี้ไปแล้วระหว่างรอ — อย่าเอารูปของใบเก่าไปแปะทับหน้าที่กำลังดูอยู่
+  if(state.selectedOrderId !== id || state.view !== 'detail') return;
+  state.detailPhotos = photos || [];
+  if(state.detailPhotos.length) render();
 }
 function backToList(){
   state.view='list'; state.selectedOrderId=null;
@@ -2562,7 +2570,12 @@ function renderList(){
 /* ============================= RENDER: DETAIL ============================= */
 function renderDetail(){
   const o = getOrder(state.selectedOrderId);
-  if(!o) return `<button class="back-link" onclick="backToList()">← กลับ</button><div class="empty-state">ไม่พบใบแจ้งซ่อมนี้</div>`;
+  if(!o){
+    // ยังโหลดรายการไม่ครบ (เช่น เพิ่งเปิดจากลิงก์แจ้งเตือน LINE แล้วคำขอใบเดียวยังไม่กลับมา)
+    // — ยังสรุปไม่ได้ว่า "ไม่พบ" จึงต้องบอกว่ากำลังเปิดอยู่ ไม่ใช่เด้งผู้ใช้ไปหน้าอื่นหรือฟ้องว่าหาไม่เจอ
+    if(!state.ordersLoaded) return `<div class="empty-state">กำลังเปิดใบแจ้งซ่อม…</div>`;
+    return `<button class="back-link" onclick="backToList()">← กลับ</button><div class="empty-state">ไม่พบใบแจ้งซ่อมนี้</div>`;
+  }
   const meta = STATUS_META[o.status];
 
   const timeline = o.statusHistory.map(h => `
@@ -3414,7 +3427,9 @@ function renderRejectedAccess(){
 function render(){
   const app = document.getElementById('app');
   if(state.authStatus === 'loading'){
-    app.innerHTML = `<div style="padding:60px; text-align:center; color:var(--slate);">กำลังตรวจสอบสิทธิ์ผู้ใช้งาน...</div>`;
+    // คนที่กดลิงก์จากไลน์ควรเห็นว่าแอปกำลังพาไปที่ใบนั้นอยู่ ไม่ใช่ข้อความที่ไม่เกี่ยวกับสิ่งที่เขากดมา
+    const waitMsg = DEEP_LINK.orderId ? 'กำลังเปิดใบแจ้งซ่อมจากลิงก์แจ้งเตือน...' : 'กำลังตรวจสอบสิทธิ์ผู้ใช้งาน...';
+    app.innerHTML = `<div style="padding:60px; text-align:center; color:var(--slate);">${waitMsg}</div>`;
     return;
   }
   if(state.authStatus === 'guest'){ app.innerHTML = renderRequestAccess(); return; }
@@ -3551,6 +3566,41 @@ async function checkForUpdate(){
 /* รองรับลิงก์ลึกจากการแจ้งเตือน LINE: ?order=<id>&role=<role> เปิดตรงไปที่ใบแจ้งซ่อมนั้น
    และสลับบทบาทให้ตรงกับผู้รับแจ้งเตือน (ถ้าบัญชีนี้มีสิทธิ์บทบาทนั้นจริง)
    ?role=admin&view=settings เปิดตรงไปหน้า "ตั้งค่าข้อมูลหลัก" (ใช้กับลิงก์แจ้งเตือนคำขอสิทธิ์ใหม่ — ดู accessRequestsDeepLink) */
+/* อ่านพารามิเตอร์ของลิงก์ "ตั้งแต่ตอนโหลดสคริปต์" แล้วปักหน้าเป้าหมายลง state ทันที — ต้องเกิดก่อน
+   render() ครั้งแรกเสมอ
+   เดิมโค้ดส่วนนี้อยู่กลาง startApp() ซึ่งกว่าจะได้ทำงานต้องผ่าน resolveAccess() (ยิง Apps Script
+   หนึ่งรอบ) มาก่อน ระหว่างนั้นแอปวาดหน้าจอตาม state.view เริ่มต้นคือ 'new' = "ใบคำร้อง/ใบแจ้งซ่อม"
+   ผู้ใช้ที่กดลิงก์แจ้งเตือนจากไลน์จึงต้องนั่งดูฟอร์มแจ้งซ่อมเปล่าๆ ที่ไม่เกี่ยวข้องอยู่หลายวินาที
+   ก่อนหน้าจอจะกระโดดไปใบที่ตั้งใจเปิด */
+const DEEP_LINK = (function(){
+  const params = new URLSearchParams(location.search);
+  const dl = {
+    orderId: params.get('order') || '',
+    role:    params.get('role') || '',
+    view:    params.get('view') || '',
+    search:  '',   // query string ตัวจริง เก็บไว้ใช้ตอนต้องโหลดหน้าใหม่ (ดู init())
+  };
+  if(dl.orderId || dl.role || dl.view){
+    dl.search = location.search;
+    // ล้างพารามิเตอร์ออกจากแถบที่อยู่ทันที กันผู้ใช้กดรีเฟรชแล้วถูกลากกลับมาใบเดิมซ้ำๆ
+    history.replaceState(null, '', location.pathname);
+  }
+  return dl;
+})();
+/* ปักหน้าเป้าหมายลง state ก่อนที่ใครจะเรียก render() ได้ — หน้าแรกที่ผู้ใช้เห็นจึงเป็นใบที่กดมาเลย
+   (ระหว่างที่ข้อมูลใบยังไม่มา renderDetail() จะขึ้น "กำลังเปิดใบแจ้งซ่อม…" ให้แทน) */
+if(DEEP_LINK.orderId){
+  state.view = 'detail';
+  state.selectedOrderId = DEEP_LINK.orderId;
+} else if(DEEP_LINK.view === 'settings'){
+  // ไม่ใช่ admin จะได้หน้ารายการแทนเอง (ดูเงื่อนไขใน render()) ไม่ต้องกันซ้ำตรงนี้
+  state.view = 'settings';
+}
+/* ยิงคำขอ "ขอใบนี้ใบเดียว" ขนานไปกับการเช็คสิทธิ์เลย ไม่รอให้เช็คเสร็จก่อน — เดิมสองคำขอนี้ต่อคิวกัน
+   (เช็คสิทธิ์ → ขอใบ) ผู้ใช้จึงต้องรอ Apps Script สองรอบเต็มๆ กว่าจะเห็นใบที่กดมาจากลิงก์
+   getOrderById() ดักข้อผิดพลาดไว้เองแล้ว (คืน null) พรอมิสนี้จึงไม่มีทาง reject ทิ้งไว้ */
+const deepLinkOrderPromise = DEEP_LINK.orderId ? getOrderById(DEEP_LINK.orderId) : null;
+
 /* เข้าสู่แอปจริง (หลังยืนยันสิทธิ์แล้ว) — แยกออกมาจาก init() เพื่อให้เรียกซ้ำได้ตอนผู้ใช้เพิ่งได้สิทธิ์
    ระหว่างอยู่หน้า "ขอสิทธิ์เข้าใช้งาน" โดยไม่ต้อง location.reload() (ดูเหตุผลใน recheckAccess) */
 let appStarted = false;
@@ -3561,35 +3611,30 @@ async function startApp(){
   // เท่ากับต่อคลื่นเครือข่ายเข้าไปใน critical path อีกหนึ่งชั้นโดยไม่จำเป็น — ทุกจุดที่ต้องใช้ค่าจริงจาก
   // config เช็ค configReady()/state.loaded เองอยู่แล้ว (ดู renderNew/renderRequestAccess/หน้าตั้งค่า)
   ensureEssentialLoaded().then(render);
+
+  // สลับบทบาทตามลิงก์ "ก่อน" วาดหน้าจอ ไม่ใช่หลัง — หน้าแรกที่ผู้ใช้เห็นจะได้เป็นบทบาทที่ถูกต้อง
+  // ตั้งแต่ต้น ไม่กระพริบเปลี่ยนทีหลัง
+  if(DEEP_LINK.role && state.allowedRoles.includes(DEEP_LINK.role)){
+    state.role = DEEP_LINK.role;
+    if(DEEP_LINK.role === 'tech') state.myTechName = state.techIdentities[0] || '';
+  }
   render();
 
-  const params = new URLSearchParams(location.search);
-  const linkOrderId = params.get('order');
-  const linkRole = params.get('role');
-  const linkView = params.get('view');
-  if(linkRole && state.allowedRoles.includes(linkRole)){
-    state.role = linkRole;
-    if(linkRole === 'tech') state.myTechName = state.techIdentities[0] || '';
-  }
-  if(linkOrderId){
-    history.replaceState(null, '', location.pathname);
-    // ลัดคิว: ขอใบนี้ใบเดียวจากเซิร์ฟเวอร์ก่อน ให้เห็นหน้ารายละเอียดไวๆ ระหว่างที่รายการเต็มโหลดเบื้องหลัง
-    // อยู่ (ปุ่มที่ต้องบันทึกจะถูกซ่อนไว้จนกว่า loadBackground() จะเสร็จ ดู renderDetail())
-    const peeked = await getOrderById(linkOrderId);
+  if(DEEP_LINK.orderId){
+    // ใช้ผลของคำขอใบเดียวที่ยิงไว้ตั้งแต่ตอนโหลดสคริปต์ ระหว่างที่รายการเต็มยังโหลดอยู่เบื้องหลัง
+    // (ปุ่มที่ต้องบันทึกถูกซ่อนไว้จนกว่า loadBackground() จะเสร็จ ดู renderDetail())
+    const peeked = await deepLinkOrderPromise;
     if(peeked){
       // รวมเข้ากับรายการที่มีอยู่ (อาจมาจากสำเนาในเครื่อง) แทนที่จะแทนที่ทั้งก้อนด้วยใบเดียว —
       // ใบที่ขอมาสดกว่าเสมอจึงทับของเดิมที่ id เดียวกัน ส่วนใบอื่นๆ ยังอยู่ให้ผู้ใช้กดดูต่อได้ทันที
       const rest = state.orders.filter(o => o.id !== peeked.id);
       state.orders = [peeked, ...rest];
-      await openDetail(linkOrderId);
     }
-    else render();
-  } else if(linkView === 'settings' && state.role === 'admin'){
-    history.replaceState(null, '', location.pathname);
-    state.view = 'settings';
-    render();
-  } else {
-    render();
+    // เรียกเสมอแม้ขอใบไม่สำเร็จ ไม่ใช่แค่ตอนได้ใบมา — หน้ารายละเอียดจะขึ้น "กำลังเปิดใบแจ้งซ่อม…"
+    // รอ loadBackground() มาเติมให้ ดีกว่าปล่อยผู้ใช้ค้างอยู่หน้าอื่นที่เขาไม่ได้กดมา
+    // ไม่ await — openDetail() วาดหน้าจอให้ตั้งแต่ก่อน await ตัวแรกอยู่แล้ว ที่เหลือคือรูปแนบซึ่ง
+    // ไม่ควรไปกั้น loadBackground() ข้างล่างไว้
+    openDetail(DEEP_LINK.orderId);
   }
   loadBackground(); // ไม่ await — โหลดเบื้องหลัง ไม่บล็อกหน้าจอ
   startPolling();
@@ -3600,6 +3645,10 @@ async function startApp(){
 }
 
 (async function init(){
+  // วาดหน้ารอเป็นอย่างแรกเลย — ระหว่างที่ resolveAccess() ยังไม่กลับมา ไม่มีใครเรียก render() เลย
+  // สิ่งที่ค้างอยู่บนจอคือข้อความ static ใน markup ("กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…") ซึ่งไม่บอกอะไร
+  // กับคนที่เพิ่งกดลิงก์ใบแจ้งซ่อมมาจากไลน์ — ดูข้อความตามบริบทใน render()
+  render();
   // เริ่มจากสำเนาในเครื่องก่อนเสมอ ถ้ามี — วาดหน้าจอได้ทันทีโดยไม่แตะเครือข่ายเลย แล้วค่อยเช็คสิทธิ์
   // และโหลดของสดทับเบื้องหลัง ผู้ใช้จึงไม่ต้องนั่งดู "กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…" ระหว่างรอคิว Apps Script
   state.deviceId = getDeviceId();
@@ -3615,7 +3664,9 @@ async function startApp(){
   if(state.authStatus !== 'ok'){
     // เคยบูตจากสำเนาแล้วแต่เซิร์ฟเวอร์บอกว่าไม่มีสิทธิ์จริง (ถูกถอนสิทธิ์/สำเนาไม่ตรงกับของจริง)
     // — ล้างสำเนาแล้วเริ่มใหม่หมด เพราะตอนนี้แอปเดินมาไกลเกินกว่าจะถอยกลับหน้าขอสิทธิ์อย่างสะอาด
-    if(bootedFromCache){ clearSnapshot(); location.reload(); return; }
+    // โหลดใหม่พร้อมพารามิเตอร์เดิม ไม่ใช่ location.reload() — ตอนนี้แถบที่อยู่ถูกล้างไปแล้ว
+    // (ดู DEEP_LINK) reload เฉยๆ จะพาผู้ใช้ไปโผล่หน้าแรกแทนใบที่เขากดมาจากไลน์
+    if(bootedFromCache){ clearSnapshot(); location.replace(location.pathname + DEEP_LINK.search); return; }
     // หน้า "ขอสิทธิ์เข้าใช้งาน" ใช้ config (แผนก/ชื่อช่าง) ในดรอปดาวน์ — โหลดเบื้องหลังไม่บล็อกฟอร์ม
     // (เดิมหน้านี้ไม่เคยโหลด config เลย เลยโชว์รายชื่อ default ที่ฝังไว้ในโค้ด ไม่ใช่ของจริงจากชีต)
     ensureEssentialLoaded().then(render);
