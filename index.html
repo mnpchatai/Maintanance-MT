@@ -176,7 +176,7 @@
   .cam-hint{position:absolute; top:0; left:0; right:0; padding:14px 16px calc(14px + env(safe-area-inset-top)); color:#fff; font-size:12.5px; text-align:center; background:linear-gradient(rgba(0,0,0,.6), transparent);}
   .photo-thumbs{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;}
   .photo-thumb{position:relative; width:74px; height:74px; border-radius:7px; overflow:hidden; border:1px solid var(--line);}
-  .photo-thumb img{width:100%; height:100%; object-fit:cover;}
+  .photo-thumb img{width:100%; height:100%; object-fit:cover; cursor:zoom-in;}
   .photo-thumb .rm{
     position:absolute; top:2px; right:2px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%;
     width:18px; height:18px; font-size:11px; cursor:pointer; line-height:18px; padding:0;
@@ -234,7 +234,7 @@
   .timeline-item::before{content:''; position:absolute; left:-21px; top:3px; width:9px; height:9px; border-radius:50%; background:var(--amber-dark);}
   .timeline-item .t-time{color:var(--slate); font-size:11.5px;}
   .gallery{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
-  .gallery img{width:100px; height:100px; object-fit:cover; border-radius:7px; border:1px solid var(--line); cursor:pointer;}
+  .gallery img{width:100px; height:100px; object-fit:cover; border-radius:7px; border:1px solid var(--line); cursor:zoom-in;}
   .action-box{background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:16px; margin-top:16px;}
   .action-box h4{margin:0 0 10px; font-size:14px; color:var(--navy);}
   .reject-box{margin-top:10px; background:#fff; border:1px solid var(--line); border-radius:7px; padding:12px;}
@@ -294,6 +294,46 @@
   .toast.err{background:var(--danger);}
   @keyframes toastin{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
 
+  /* ดูรูปเต็มจอ (lightbox) — วางไว้นอก #app เหมือนกล้อง เพราะ render() เขียนทับ innerHTML ทั้งก้อนทุกครั้ง */
+  .lightbox{
+    display:none; position:fixed; inset:0; z-index:9500; background:rgba(0,0,0,.94);
+  }
+  .lightbox.open{display:block;}
+  /* ใช้ margin:auto จัดกึ่งกลางแทน align/justify-center — เวลาซูมจนรูปใหญ่กว่าจอ
+     flex ที่จัดกึ่งกลางจะตัดขอบซ้าย/บนจนเลื่อนไปดูไม่ได้ */
+  .lb-stage{
+    position:absolute; inset:0; display:flex; overflow:auto; -webkit-overflow-scrolling:touch;
+    padding:calc(54px + env(safe-area-inset-top)) 10px calc(46px + env(safe-area-inset-bottom));
+  }
+  .lb-stage img{
+    margin:auto; max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain;
+    border-radius:4px; cursor:zoom-in; -webkit-user-select:none; user-select:none; -webkit-user-drag:none;
+  }
+  .lb-stage.zoom img{max-width:none; max-height:none; cursor:zoom-out;}
+  .lb-bar{
+    position:absolute; top:0; left:0; right:0; z-index:2; display:flex; align-items:center; justify-content:space-between;
+    gap:12px; color:#fff; font-size:13px; pointer-events:none;
+    padding:calc(12px + env(safe-area-inset-top)) 14px 22px;
+    background:linear-gradient(rgba(0,0,0,.7), transparent);
+  }
+  .lb-bar button{
+    pointer-events:auto; background:rgba(255,255,255,.15); color:#fff; border:1px solid rgba(255,255,255,.5);
+    border-radius:8px; padding:7px 15px; font-family:'Sarabun',sans-serif; font-size:14px; cursor:pointer;
+  }
+  .lb-nav{
+    position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:42px; height:42px; padding:0;
+    border-radius:50%; border:1px solid rgba(255,255,255,.45); background:rgba(0,0,0,.45); color:#fff;
+    font-size:24px; line-height:38px; cursor:pointer;
+  }
+  .lb-prev{left:10px;}
+  .lb-next{right:10px;}
+  .lb-hint{
+    position:absolute; left:0; right:0; bottom:0; z-index:1; text-align:center; pointer-events:none;
+    color:rgba(255,255,255,.75); font-size:12px;
+    padding:20px 16px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(transparent, rgba(0,0,0,.7));
+  }
+
   ::-webkit-scrollbar{width:8px; height:8px;}
   ::-webkit-scrollbar-thumb{background:#cfc7b2; border-radius:8px;}
 </style>
@@ -309,6 +349,21 @@
     <button type="button" class="cam-shutter" id="camShutter" onclick="shootInAppCamera()" aria-label="ถ่ายภาพ"></button>
     <button type="button" id="camFlip" onclick="flipInAppCamera()">สลับกล้อง</button>
   </div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <div class="lb-stage" id="lbStage"
+       onclick="onLightboxStageClick(event)"
+       ontouchstart="onLightboxTouchStart(event)" ontouchend="onLightboxTouchEnd(event)">
+    <img id="lbImage" src="" alt="รูปภาพประกอบ" onclick="toggleLightboxZoom(event)">
+  </div>
+  <div class="lb-bar">
+    <span id="lbCounter"></span>
+    <button type="button" onclick="closeLightbox()">✕ ปิด</button>
+  </div>
+  <button type="button" class="lb-nav lb-prev" id="lbPrev" onclick="stepLightbox(-1, event)" aria-label="รูปก่อนหน้า">‹</button>
+  <button type="button" class="lb-nav lb-next" id="lbNext" onclick="stepLightbox(1, event)" aria-label="รูปถัดไป">›</button>
+  <div class="lb-hint" id="lbHint"></div>
 </div>
 
 <script>
@@ -434,7 +489,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.1';
+const APP_VERSION = '2026-09-03.2';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1594,6 +1649,99 @@ async function flipInAppCamera(){
   try{ await startCamStream(); }
   catch(e){ console.error(e); toast('สลับกล้องไม่สำเร็จ', true); }
 }
+/* ============================= LIGHTBOX (ดูรูปเต็มจอ) ============================= */
+/* กดรูปในใบแจ้งซ่อม/รูปที่แนบไว้แล้วเปิดดูเต็มจอ เลื่อนดูรูปถัดไป และแตะซ้ำเพื่อซูมขนาดจริง
+   ตัว overlay อยู่นอก #app เพราะ render() เขียนทับ innerHTML ทั้งก้อนทุกครั้ง */
+let lbList = [];           // รายการรูปของชุดที่กำลังเปิดดู (copy ไว้ กัน state เปลี่ยนกลางคัน)
+let lbIndex = 0;
+let lbTouch = null;        // จุดเริ่มนิ้วสำหรับปัดเปลี่ยนรูป
+let lbSwallowClick = false;// ปัดจบแล้ว browser ยิง click ตาม — กันไม่ให้ไปสั่งซูม
+
+function lightboxBucket(source){
+  if(source === 'form') return state.form.photos;
+  if(source === 'resubmit') return state.ui.resubmitPhotos;
+  return state.detailPhotos;
+}
+function openLightbox(index, source){
+  const list = (lightboxBucket(source) || []).filter(Boolean);
+  if(!list.length) return;
+  lbList = list.slice();
+  lbIndex = Math.min(Math.max(parseInt(index, 10) || 0, 0), lbList.length - 1);
+  document.getElementById('lightbox').classList.add('open');
+  document.body.style.overflow = 'hidden';   // กันหน้าเบื้องหลังเลื่อนตามนิ้ว
+  paintLightbox();
+}
+function paintLightbox(){
+  const many = lbList.length > 1;
+  setLightboxZoom(false);
+  document.getElementById('lbImage').src = lbList[lbIndex] || '';
+  document.getElementById('lbCounter').textContent = many ? `${lbIndex + 1} / ${lbList.length}` : '';
+  document.getElementById('lbPrev').style.display = many ? 'block' : 'none';
+  document.getElementById('lbNext').style.display = many ? 'block' : 'none';
+  document.getElementById('lbHint').textContent = many
+    ? 'แตะรูปเพื่อซูม • ปัดซ้าย-ขวาเพื่อดูรูปอื่น • แตะพื้นที่ว่างเพื่อปิด'
+    : 'แตะรูปเพื่อซูม • แตะพื้นที่ว่างเพื่อปิด';
+}
+function closeLightbox(){
+  document.getElementById('lightbox').classList.remove('open');
+  setLightboxZoom(false);
+  document.getElementById('lbImage').src = '';   // ปล่อยรูป base64 ก้อนใหญ่ทิ้ง ไม่ค้างในหน่วยความจำ
+  document.body.style.overflow = '';
+  lbList = []; lbIndex = 0; lbTouch = null;
+}
+function lightboxOpen(){
+  return document.getElementById('lightbox').classList.contains('open');
+}
+function stepLightbox(dir, e){
+  if(e) e.stopPropagation();
+  if(lbList.length < 2) return;
+  lbIndex = (lbIndex + dir + lbList.length) % lbList.length;
+  paintLightbox();
+}
+function setLightboxZoom(on){
+  const stage = document.getElementById('lbStage');
+  stage.classList.toggle('zoom', !!on);
+  if(!on){ stage.scrollTop = 0; stage.scrollLeft = 0; }
+}
+function toggleLightboxZoom(e){
+  e.stopPropagation();
+  if(lbSwallowClick){ lbSwallowClick = false; return; }
+  const stage = document.getElementById('lbStage');
+  const zoomOn = !stage.classList.contains('zoom');
+  setLightboxZoom(zoomOn);
+  if(zoomOn){
+    // ขยายแล้วให้เริ่มมองที่กลางรูป ไม่ใช่มุมซ้ายบน
+    const img = document.getElementById('lbImage');
+    stage.scrollLeft = Math.max(0, (img.offsetWidth  - stage.clientWidth)  / 2);
+    stage.scrollTop  = Math.max(0, (img.offsetHeight - stage.clientHeight) / 2);
+  }
+}
+function onLightboxStageClick(e){
+  if(e.target.id === 'lbStage') closeLightbox();   // แตะพื้นที่ว่างรอบรูป = ปิด
+}
+function onLightboxTouchStart(e){
+  lbSwallowClick = false;
+  if(e.touches.length !== 1 || document.getElementById('lbStage').classList.contains('zoom')){ lbTouch = null; return; }
+  lbTouch = { x:e.touches[0].clientX, y:e.touches[0].clientY };
+}
+function onLightboxTouchEnd(e){
+  if(!lbTouch) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - lbTouch.x, dy = t.clientY - lbTouch.y;
+  lbTouch = null;
+  if(Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)){
+    lbSwallowClick = true;
+    stepLightbox(dx < 0 ? 1 : -1);
+  }
+}
+/* บนคอม — Esc ปิด, ลูกศรซ้าย/ขวาเปลี่ยนรูป */
+document.addEventListener('keydown', e => {
+  if(!lightboxOpen()) return;
+  if(e.key === 'Escape'){ closeLightbox(); }
+  else if(e.key === 'ArrowLeft'){ stepLightbox(-1); }
+  else if(e.key === 'ArrowRight'){ stepLightbox(1); }
+});
+
 /* บนคอมมีคีย์บอร์ด — ให้ Esc ปิดกล้องได้เหมือน overlay ทั่วไป */
 document.addEventListener('keydown', e => {
   if(e.key === 'Escape' && camStream) closeInAppCamera();
@@ -2164,7 +2312,7 @@ function renderNew(){
   }
 
   const photoThumbs = f.photos.map((p,i) => `
-    <div class="photo-thumb"><img src="${p}"><button class="rm" onclick="removePhoto(${i})">✕</button></div>`).join('');
+    <div class="photo-thumb"><img src="${p}" alt="รูปที่แนบ ${i+1}" title="กดเพื่อดูเต็มจอ" onclick="openLightbox(${i},'form')"><button class="rm" onclick="removePhoto(${i})">✕</button></div>`).join('');
 
   return `
   <h2 class="view-title">ใบคำร้อง / ใบแจ้งซ่อม</h2>
@@ -2287,7 +2435,7 @@ function renderDetail(){
 
   const gallery = state.detailPhotos.length ? `
     <div class="kv"><div class="k">รูปภาพประกอบ</div>
-      <div class="gallery">${state.detailPhotos.map(p=>`<img src="${p}">`).join('')}</div>
+      <div class="gallery">${state.detailPhotos.map((p,i)=>`<img src="${p}" alt="รูปภาพประกอบที่ ${i+1}" title="กดเพื่อดูเต็มจอ" onclick="openLightbox(${i},'detail')">`).join('')}</div>
     </div>` : '';
 
   // action box depending on role + status
@@ -2299,7 +2447,7 @@ function renderDetail(){
   function noteBox(){
     if(!actionBoxOpen) return '';
     const photoThumbs = state.ui.resubmitPhotos.map((p,i) => `
-      <div class="photo-thumb"><img src="${p}"><button class="rm" onclick="removeResubmitPhoto(${i})">✕</button></div>`).join('');
+      <div class="photo-thumb"><img src="${p}" alt="รูปที่แนบ ${i+1}" title="กดเพื่อดูเต็มจอ" onclick="openLightbox(${i},'resubmit')"><button class="rm" onclick="removeResubmitPhoto(${i})">✕</button></div>`).join('');
     const photoSection = actionType === 'resubmit' ? `
       <div class="field" style="margin-top:10px; margin-bottom:0;">
         <label class="field-label">แนบรูปภาพประกอบเพิ่มเติม (สูงสุด 5 รูป)</label>
