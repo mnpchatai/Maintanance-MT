@@ -69,6 +69,19 @@
   .card{background:var(--card); border-radius:10px; padding:20px; box-shadow:0 1px 3px rgba(31,44,59,0.08); border:1px solid #ece6d8;}
   label.field-label{display:block; font-size:13px; font-weight:600; color:var(--navy); margin-bottom:6px;}
   .req-star{color:var(--danger);}
+  /* "ต้องการด่วน" — ป้ายและช่องติ๊กในฟอร์มแจ้งซ่อม ใช้โทนสีแดงชุดเดียวกับ req-star
+     เพื่อให้สายตาจับได้ทันทีทั้งในรายการและหน้ารายละเอียด */
+  .urgent-pill{
+    display:inline-block; font-size:11.5px; font-weight:700; padding:3px 9px; border-radius:20px;
+    color:var(--danger); background:var(--danger-bg); border:1px solid var(--danger); white-space:nowrap;
+  }
+  .check-row{
+    display:flex; align-items:flex-start; gap:9px; background:var(--danger-bg); border:1.5px solid #eecfcb;
+    border-radius:7px; padding:10px 12px; cursor:pointer;
+  }
+  .check-row input{width:18px; height:18px; margin:1px 0 0; accent-color:var(--danger); flex:none; cursor:pointer;}
+  .check-row .txt{font-size:13.5px; font-weight:600; color:var(--danger);}
+  .check-row .txt small{display:block; font-weight:400; color:var(--slate); font-size:11.5px; margin-top:2px;}
   select.input, input.input, textarea.input{
     width:100%; padding:10px 12px; border-radius:7px; border:1.5px solid var(--line); background:#fff;
     font-family:'Sarabun',sans-serif; font-size:14px; color:var(--ink);
@@ -428,7 +441,7 @@ const INSPECTOR_OPINION_META = {
   buy_parts:   'ซื้ออุปกรณ์มาทำเอง',
 };
 
-const emptyForm = () => ({ dept:'', docType:'', machineCode:'', machineSearch:'', machineName:'', cause:'', neededDate:'', requestedBy:'', photos:[] });
+const emptyForm = () => ({ dept:'', docType:'', machineCode:'', machineSearch:'', machineName:'', cause:'', neededDate:'', urgent:false, requestedBy:'', photos:[] });
 const emptyPartRow = () => ({ name:'', qty:'', unit:'', price:'', shop:'', note:'' });
 
 let state = {
@@ -465,7 +478,7 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
@@ -489,7 +502,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.3';
+const APP_VERSION = '2026-09-03.4';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1896,7 +1909,7 @@ async function submitOrder(){
   const id = uid();
   const order = {
     id, docNumber, department: f.dept, docType: f.docType, machineCode: f.machineCode, machineName: f.machineName,
-    cause: f.cause.trim(), neededDate: f.neededDate, requestedBy: f.requestedBy.trim(),
+    cause: f.cause.trim(), neededDate: f.neededDate, urgent: !!f.urgent, requestedBy: f.requestedBy.trim(),
     // ตัวตนของ "คนที่กดส่งใบนี้" — ใช้ยิงแจ้งเตือนกลับหาเจ้าของใบคนเดียว ไม่ใช่ผู้แจ้งซ่อมทุกคน
     // (ช่องชื่อผู้แจ้งแก้เป็นชื่อคนอื่นได้ เช่นแจ้งแทนเพื่อน จึงเก็บทั้งรหัสเครื่องและ LINE ที่ผูกไว้)
     requesterDidHash: state.didHash || '',
@@ -1907,7 +1920,7 @@ async function submitOrder(){
     maintRecord: null,
     verification: null,
     verificationHistory: [],
-    statusHistory: [{ status:'PENDING_FM', at: nowIso(), note:'สร้างใบแจ้งซ่อม โดย ' + f.requestedBy.trim() }],
+    statusHistory: [{ status:'PENDING_FM', at: nowIso(), note:'สร้างใบแจ้งซ่อม โดย ' + f.requestedBy.trim() + (f.urgent ? ' (ต้องการด่วน)' : '') }],
   };
   const newOrders = [order, ...state.orders];
 
@@ -1927,7 +1940,7 @@ async function submitOrder(){
     if(!photosOk) toast('บันทึกรูปภาพแนบไม่สำเร็จ แต่ใบแจ้งซ่อมถูกบันทึกแล้ว', true);
   }
 
-  await pushNotification('fm', id, docNumber, `มีใบแจ้งซ่อมใหม่จากแผนก ${f.dept} รอการอนุมัติของท่าน`);
+  await pushNotification('fm', id, docNumber, `${f.urgent ? '🚨 [ด่วน] ' : ''}มีใบแจ้งซ่อมใหม่จากแผนก ${f.dept} รอการอนุมัติของท่าน`);
 
   state.form = emptyForm();
   applyMyNameToForm();
@@ -1949,6 +1962,7 @@ async function openDetail(id){
   state.selectedOrderId = id;
   state.view = 'detail';
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote='';
+  state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
   const photos = await storeGet('photos:'+id);
   state.detailPhotos = photos || [];
   // mark related notifications read for current role (admin: all roles' notifications for this order)
@@ -1957,7 +1971,11 @@ async function openDetail(id){
   if(changed) await storeSet('notifications', state.notifications);
   render();
 }
-function backToList(){ state.view='list'; state.selectedOrderId=null; render(); }
+function backToList(){
+  state.view='list'; state.selectedOrderId=null;
+  state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
+  render();
+}
 function getOrder(id){ return state.orders.find(o => o.id === id); }
 
 // เผื่อ state.orders ยังเป็นแค่ใบเดียวที่ขอมาแบบด่วนตอนเปิดจากลิงก์แจ้งเตือน (ยังไม่ใช่รายการเต็ม) —
@@ -1975,6 +1993,55 @@ function closeActionBox(){
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
   render();
 }
+
+/* admin แก้ไข "วันที่ต้องการใช้งาน" และธง "ต้องการด่วน" ของใบที่ส่งไปแล้วได้
+   (ผู้แจ้งกรอกวันผิด หรือความเร่งด่วนเปลี่ยนหลังส่ง — เดิมต้องยกเลิกใบแล้วแจ้งใหม่ทั้งใบ
+   ซึ่งกินเลขที่เอกสารเพิ่มอีกใบและทำให้ประวัติการอนุมัติที่ทำไปแล้วหายไปทั้งหมด)
+   ทุกครั้งที่แก้จะถูกบันทึกลง statusHistory โดยไม่เปลี่ยนสถานะใบ เพื่อให้ตามรอยได้ว่าแก้อะไรเมื่อไหร่ */
+function openEditNeededDate(id){
+  const o = getOrder(id); if(!o) return;
+  state.ui.editNeededFor = id;
+  state.ui.editNeededDate = o.neededDate || '';
+  state.ui.editNeededUrgent = !!o.urgent;
+  render();
+}
+function cancelEditNeededDate(){
+  state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
+  render();
+}
+async function saveNeededDate(id){
+  const o = getOrder(id); if(!o) return;
+  if(state.role !== 'admin'){ toast('เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขข้อมูลนี้ได้', true); return; }
+  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
+  const newDate = state.ui.editNeededDate;
+  if(!newDate){ toast('กรุณาระบุวันที่ต้องการใช้งาน', true); return; }
+  const newUrgent = !!state.ui.editNeededUrgent;
+  const oldDate = o.neededDate || '';
+  const oldUrgent = !!o.urgent;
+  if(newDate === oldDate && newUrgent === oldUrgent){ cancelEditNeededDate(); return; }
+
+  const changes = [];
+  if(newDate !== oldDate) changes.push(`วันที่ต้องการใช้งาน ${oldDate ? fmtDate(oldDate) : '—'} → ${fmtDate(newDate)}`);
+  if(newUrgent !== oldUrgent) changes.push(newUrgent ? 'ตั้งเป็น "ต้องการด่วน"' : 'ยกเลิก "ต้องการด่วน"');
+  const note = 'ผู้ดูแลระบบแก้ไข: ' + changes.join(' • ');
+
+  o.neededDate = newDate;
+  o.urgent = newUrgent;
+  o.statusHistory.push({ status: o.status, at: nowIso(), note });
+
+  const ok = await persistOrders();
+  if(!ok){
+    // เขียนกลับเซิร์ฟเวอร์ไม่สำเร็จ — คืนค่าเดิมใน state ทันที ห้ามปล่อยให้หน้าจอโชว์ค่าที่ยังไม่เข้าฐานข้อมูลจริง
+    o.neededDate = oldDate; o.urgent = oldUrgent; o.statusHistory.pop();
+    toast('บันทึกการแก้ไขไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    render();
+    return;
+  }
+  await notifyOrderRequester(o, note);
+  toast('บันทึกการแก้ไขแล้ว');
+  cancelEditNeededDate();
+}
+
 async function handleResubmitPhotoInput(input){
   const files = takeFilesFromInput(input);
   if(!files.length) return;
@@ -2427,6 +2494,10 @@ function renderNew(){
       <div class="field">
         <label class="field-label">5. วันที่ต้องการใช้งาน <span class="req-star">*</span></label>
         <input class="input" data-fid="neededDate" type="date" value="${f.neededDate}" oninput="updateFormField('neededDate', this.value)">
+        <label class="check-row" style="margin-top:10px;">
+          <input type="checkbox" ${f.urgent?'checked':''} onchange="updateFormField('urgent', this.checked)">
+          <span class="txt">🚨 ต้องการด่วน<small>ติ๊กเมื่อจำเป็นต้องซ่อมโดยเร็วที่สุด ระบบจะแจ้งผู้อนุมัติว่าใบนี้เป็นงานด่วน</small></span>
+        </label>
       </div>
       <div class="field">
         <label class="field-label">ชื่อผู้แจ้ง <span class="req-star">*</span></label>
@@ -2455,12 +2526,15 @@ function renderList(){
           <span style="margin-left:8px; font-weight:600; color:var(--navy);">${o.department}</span>
           ${o.docType ? `<span style="margin-left:8px; font-size:11.5px; color:var(--slate);">${DOC_TYPES[o.docType]||''}</span>` : ''}
         </div>
-        <span class="status-pill" style="color:${meta.color}; background:${meta.bg};">${meta.label}</span>
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          ${o.urgent ? `<span class="urgent-pill">🚨 ด่วน</span>` : ''}
+          <span class="status-pill" style="color:${meta.color}; background:${meta.bg};">${meta.label}</span>
+        </div>
       </div>
       <div class="order-body">
         <div><b class="mono">${escapeHtml(o.machineCode)}</b> — ${escapeHtml(o.machineName)}</div>
         <div class="cause">${escapeHtml(o.cause.length>90 ? o.cause.slice(0,90)+'…' : o.cause)}</div>
-        <div class="order-meta">ผู้แจ้ง: ${escapeHtml(o.requestedBy)} • ต้องการใช้งาน: ${fmtDate(o.neededDate)} • แจ้งเมื่อ ${fmtDateTime(o.createdAt)}</div>
+        <div class="order-meta">ผู้แจ้ง: ${escapeHtml(o.requestedBy)} • ต้องการใช้งาน: ${fmtDate(o.neededDate)}${o.urgent ? ' (ด่วน)' : ''} • แจ้งเมื่อ ${fmtDateTime(o.createdAt)}</div>
       </div>
       <div class="order-actions">
         <button class="btn btn-outline btn-sm" onclick="openDetail('${o.id}')">ดูรายละเอียด →</button>
@@ -2501,6 +2575,25 @@ function renderDetail(){
     <div class="kv"><div class="k">รูปภาพประกอบ</div>
       <div class="gallery">${state.detailPhotos.map((p,i)=>`<img src="${p}" alt="รูปภาพประกอบที่ ${i+1}" title="กดเพื่อดูเต็มจอ" onclick="openLightbox(${i},'detail')">`).join('')}</div>
     </div>` : '';
+
+  // ช่อง "วันที่ต้องการใช้งาน" — admin กดแก้ไขได้ในที่ ทั้งวันที่และธง "ต้องการด่วน"
+  const urgentBadge = o.urgent ? ' <span class="urgent-pill">🚨 ต้องการด่วน</span>' : '';
+  let neededDateCell;
+  if(state.role === 'admin' && state.ui.editNeededFor === o.id){
+    neededDateCell = `
+      <input type="date" class="input" style="margin-top:4px;" value="${state.ui.editNeededDate}" onchange="state.ui.editNeededDate=this.value">
+      <label class="check-row" style="margin-top:8px;">
+        <input type="checkbox" ${state.ui.editNeededUrgent?'checked':''} onchange="state.ui.editNeededUrgent=this.checked">
+        <span class="txt">🚨 ต้องการด่วน</span>
+      </label>
+      <div class="order-actions" style="margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveNeededDate('${o.id}')">บันทึกการแก้ไข</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelEditNeededDate()">ยกเลิก</button>
+      </div>`;
+  } else {
+    neededDateCell = fmtDate(o.neededDate) + urgentBadge +
+      (state.role === 'admin' ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="openEditNeededDate('${o.id}')">✎ แก้ไข</button>` : '');
+  }
 
   // action box depending on role + status
   let actionBox = '';
@@ -2720,7 +2813,7 @@ function renderDetail(){
       <div class="kv"><div class="k">รหัสเครื่องจักร</div><div class="v mono">${escapeHtml(o.machineCode)}</div></div>
       <div class="kv"><div class="k">ชื่อเครื่องจักร</div><div class="v">${escapeHtml(o.machineName)}</div></div>
       <div class="kv"><div class="k">ผู้แจ้ง</div><div class="v">${escapeHtml(o.requestedBy)}</div></div>
-      <div class="kv"><div class="k">วันที่ต้องการใช้งาน</div><div class="v">${fmtDate(o.neededDate)}</div></div>
+      <div class="kv"><div class="k">วันที่ต้องการใช้งาน</div><div class="v">${neededDateCell}</div></div>
       <div class="kv"><div class="k">แจ้งเมื่อ</div><div class="v">${fmtDateTime(o.createdAt)}</div></div>
       <div class="kv"><div class="k">ช่างผู้รับผิดชอบ</div><div class="v">${assignedTechs(o).length ? assignedTechs(o).map(escapeHtml).join(', ') : '—'}</div></div>
       ${o.assignment.receivedByName ? `<div class="kv"><div class="k">ผู้รับใบแจ้งซ่อม</div><div class="v">${escapeHtml(o.assignment.receivedByName)}</div></div>` : ''}

@@ -763,6 +763,38 @@ Script "คำร้องแจ้งซ่อม" mirror code (not in this rep
 formatting — that dropdown/color list needs to be updated by hand to
 include it, the same way the `technicians` field needed a manual mirror
 update.
+"ต้องการด่วน" — the ใบคำร้อง/ใบแจ้งซ่อม form has a checkbox under
+"5. วันที่ต้องการใช้งาน", saved as the boolean `order.urgent`. It shows as a
+red "🚨 ด่วน" pill on the order list card and "🚨 ต้องการด่วน" on the detail
+page (`.urgent-pill`/`.check-row` in the stylesheet), is appended to the
+order's first timeline entry, and prefixes the ผจก.โรงงาน notification with
+`🚨 [ด่วน]` so an urgent job is visible in LINE before anyone opens the app.
+Orders created before this change have no `urgent` field at all — every read
+goes through `!!o.urgent`, so they render as normal (non-urgent) orders and
+need no migration. The Apps Script "คำร้องแจ้งซ่อม" mirror (not in this repo)
+does not write this field to the ใบแจ้งซ่อม sheet tab; add a column by hand
+there if the urgency needs to be visible in the Sheet as well.
+`admin` can edit "วันที่ต้องการใช้งาน" and the ต้องการด่วน flag in place on
+the order detail page — a ✎ แก้ไข button next to the date opens a small
+inline editor (`openEditNeededDate()`/`cancelEditNeededDate()`/
+`saveNeededDate()` in `index.html`, backed by
+`state.ui.editNeededFor`/`.editNeededDate`/`.editNeededUrgent`). Before this
+the only way to fix a mistyped date was to reject the order and file a new
+one, which burned another document number and threw away the approvals
+already collected. Notes:
+the gate is `state.role === 'admin'`, not `hasRole('admin')`, and it is
+deliberately re-evaluated on every render — while an admin is viewing the app
+"in the role of" someone else (the role switcher), `state.role` is that other
+role and the edit button is correctly hidden;
+`saveNeededDate()` appends the change to `order.statusHistory` with the
+order's *current* status, so the edit is auditable in ลำดับเหตุการณ์ without
+moving the order anywhere in the workflow, and it pings the requester through
+`notifyOrderRequester()`;
+if `persistOrders()` fails (the Sheet is unreachable) the old date, the old
+flag and the timeline entry are all rolled back in memory and the editor stays
+open. Do not "optimise" that away — leaving the new value on screen after a
+failed write is exactly the "ส่งเรียบร้อยแต่ข้อมูลไม่เข้าชีต" trap that
+`submitOrder()` already guards against.
 Diagnosing "the code is in the sheet but I still can't get in" — the guest
 screen's admin box has a `runConnectionTest()` button that probes
 `doGet('userRoles', <this device id>)` and `doGet('accessRequests')` and
