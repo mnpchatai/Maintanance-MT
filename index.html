@@ -399,7 +399,8 @@ let state = {
   counters: {},
   orders: [],
   notifications: [],
-  loaded: false,
+  loaded: false,         // true เมื่อ config โหลดจาก "เซิร์ฟเวอร์" สำเร็จรอบนี้ — ธงนี้เท่านั้นที่ปลดล็อกการแก้ไข config
+  configFromCache: false, // true เมื่อ config ที่ถืออยู่มาจาก snapshot ในเครื่อง (โชว์ได้ แต่ห้ามใช้เป็นฐานในการเขียนทับ)
   ordersLoaded: false,   // true เมื่อ orders/notifications/counters โหลดรายการเต็มเสร็จแล้ว (ไม่ใช่แค่ใบเดียวที่ peek มา)
   lineDataLoaded: false, // true เมื่อ lineUsers/lineUserRoles/lineRecipients โหลดแล้ว (เฉพาะตอน admin เข้าหน้าตั้งค่า)
   form: emptyForm(),
@@ -433,7 +434,89 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-02.4';
+const APP_VERSION = '2026-09-03.1';
+
+/* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
+   ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
+   ตอนเปิดแอปจึงต้องรอคิว — ก่อนหน้านี้ผู้ใช้เห็นแต่ข้อความ "กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…" ค้างอยู่
+   จนกว่าจะครบ 2 คลื่นคำขอ (สิทธิ์ แล้วค่อย config) ซึ่งนานเป็นนาทีเวลาคิวยาว
+
+   วิธีแก้: เก็บสำเนาข้อมูลล่าสุดที่โหลดสำเร็จไว้ใน localStorage แล้วรอบถัดไปวาดหน้าจอจากสำเนานั้น
+   ทันทีโดยไม่แตะเครือข่ายเลย (stale-while-revalidate) ระหว่างนั้นค่อยยิงเช็คสิทธิ์/โหลดของจริง
+   เบื้องหลังแล้ววาดทับด้วยของสด
+
+   กติกาความปลอดภัยของสำเนานี้ — ห้ามผ่อน:
+   - คำตอบจากเซิร์ฟเวอร์ชนะสำเนาเสมอ ถ้าเช็คสิทธิ์แล้วพบว่าไม่มีสิทธิ์จริง จะล้างสำเนาแล้วรีโหลดทันที
+   - สำเนาผูกกับ deviceId + APP_VERSION และหมดอายุใน 7 วัน คนละเครื่อง/คนละเวอร์ชันใช้ต่อไม่ได้
+   - สำเนาใช้ "แสดงผล" เท่านั้น ไม่ปลดล็อกการเขียนกลับ — state.ordersLoaded/state.loaded ยังคงเป็น true
+     เฉพาะเมื่อโหลดจากเซิร์ฟเวอร์สำเร็จจริง ปุ่มที่ต้องบันทึกทับ orders ทั้งก้อนจึงยังถูกล็อกไว้เหมือนเดิม
+     (ดู persistOrders) ไม่งั้นจะเขียนข้อมูลเก่าทับของใหม่บนเซิร์ฟเวอร์ */
+const SNAPSHOT_KEY = 'mtSnapshot';
+const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;   // 7 วัน
+const SNAPSHOT_MAX_BYTES = 2500000;                  // กันเขียนจนเต็มโควตา localStorage (~5MB)
+const SNAPSHOT_MIN_GAP = 20000;                      // เขียนถี่สุดทุก 20 วิ — การ stringify orders ทั้งก้อนไม่ฟรี
+function readSnapshot(){
+  try{
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(!s || s.v !== APP_VERSION) return null;
+    if(!s.at || Date.now() - s.at > SNAPSHOT_MAX_AGE) return null;
+    return s;
+  }catch(e){ return null; }
+}
+function clearSnapshot(){
+  try{ localStorage.removeItem(SNAPSHOT_KEY); }catch(e){ /* เขียนไม่ได้ก็ช่างมัน */ }
+}
+let snapshotLastWrite = 0;
+function saveSnapshot(force){
+  // เก็บเฉพาะตอนเข้าใช้งานได้จริงและมี config ของจริงจากเซิร์ฟเวอร์แล้วเท่านั้น
+  // ไม่งั้นจะเผลอแคชค่า default ที่ฝังในโค้ดไว้เป็น "ข้อมูลจริง" ของรอบถัดไป
+  if(state.authStatus !== 'ok' || !state.loaded || !state.deviceId) return;
+  if(!force && Date.now() - snapshotLastWrite < SNAPSHOT_MIN_GAP) return;
+  try{
+    const payload = JSON.stringify({
+      v: APP_VERSION,
+      at: Date.now(),
+      deviceId: state.deviceId,
+      auth: {
+        allowedRoles: state.allowedRoles,
+        techIdentities: state.techIdentities,
+        myName: state.myName,
+        role: state.role,
+      },
+      config: state.config,
+      counters: state.counters,
+      orders: state.ordersLoaded ? state.orders : null,
+      notifications: state.ordersLoaded ? state.notifications : null,
+    });
+    if(payload.length > SNAPSHOT_MAX_BYTES){ clearSnapshot(); return; }
+    localStorage.setItem(SNAPSHOT_KEY, payload);
+    snapshotLastWrite = Date.now();
+  }catch(e){ /* โควตาเต็ม/โหมดส่วนตัว — ไม่ใช่เรื่องคอขาดบาดตาย ปล่อยให้โหลดจากเซิร์ฟเวอร์ตามปกติ */ }
+}
+/* วาง snapshot ลง state เพื่อ "วาดหน้าจอ" อย่างเดียว — ไม่แตะ state.loaded/state.ordersLoaded
+   ซึ่งเป็นธงที่ปลดล็อกการเขียนกลับเซิร์ฟเวอร์ (ดูเหตุผลด้านบน) */
+function applySnapshot(s){
+  if(!s || s.deviceId !== state.deviceId) return false;
+  const roles = ((s.auth && s.auth.allowedRoles) || []).filter(r => ROLES[r]);
+  if(!roles.length) return false;
+  state.allowedRoles = roles;
+  state.techIdentities = (s.auth.techIdentities || []);
+  state.myTechName = state.techIdentities[0] || '';
+  state.myName = s.auth.myName || '';
+  state.role = roles.includes(s.auth.role) ? s.auth.role : roles[0];
+  state.authStatus = 'ok';
+  applyMyNameToForm();
+  if(s.config){ state.config = s.config; if(!state.config.lineWebhooks) state.config.lineWebhooks = {}; state.configFromCache = true; }
+  if(s.counters) state.counters = s.counters;
+  if(Array.isArray(s.orders)) state.orders = s.orders;
+  if(Array.isArray(s.notifications)) state.notifications = s.notifications;
+  return true;
+}
+/* "มีรายชื่อแผนก/เครื่องจักร/ช่างของจริงให้โชว์แล้วหรือยัง" — จริงจากเซิร์ฟเวอร์ หรือจากสำเนาก็ได้
+   ต่างจาก state.loaded ที่แปลว่า "โหลดจากเซิร์ฟเวอร์สำเร็จรอบนี้" ซึ่งใช้กั้นการ *แก้ไข* config เท่านั้น */
+function configReady(){ return state.loaded || state.configFromCache; }
 
 async function storeGet(key){
   try{
@@ -628,6 +711,7 @@ async function useExistingDeviceId(){
   state.deviceIdPersisted = persistDeviceId(raw);
   state.deviceIdIsNew = false;
   state.deviceId = raw;
+  clearSnapshot();   // เปลี่ยนตัวตนแล้ว สำเนาของรหัสเดิมใช้ต่อไม่ได้ (applySnapshot กันไว้อีกชั้นด้วย)
   state.didHash = await sha256Hex(raw);
   state.ui.deviceIdInput = '';
   state.ui.deviceIdTried = true;
@@ -686,7 +770,10 @@ async function resolveAccess(){
   state.myName = (mine && mine.name) || state.techIdentities[0] || '';
   applyMyNameToForm();
   if(state.allowedRoles.length){
-    state.role = state.allowedRoles[0];
+    // คงบทบาทที่กำลังใช้อยู่ไว้ถ้ายังมีสิทธิ์นั้นจริง — resolveAccess() ถูกเรียกซ้ำได้ระหว่างใช้งาน
+    // (ตอนบูตจากสำเนา, ตอน poll เจอว่าคำขอสิทธิ์เปลี่ยน) การรีเซ็ตกลับเป็นบทบาทแรกทุกครั้งจะเตะผู้ใช้
+    // ออกจากบทบาทที่เพิ่งสลับไป รวมถึงบทบาทที่มาจากลิงก์แจ้งเตือน LINE (?role=...)
+    state.role = state.allowedRoles.includes(state.role) ? state.role : state.allowedRoles[0];
     state.authStatus = 'ok';
   } else if(mine && mine.status === 'pending'){
     state.authStatus = 'pending';
@@ -696,18 +783,19 @@ async function resolveAccess(){
     state.authStatus = 'guest';
   }
 }
-async function authenticate(){
-  state.deviceId = getDeviceId();
-  state.didHash = await sha256Hex(state.deviceId);
-  // ไม่รอโหลด config (ต้องอ่านชีตแผนก/เครื่องจักร/ช่างสด 3 ชีต ซึ่งช้าที่สุดในบรรดา doGet ทั้งหมด)
-  // ก่อนเช็คสิทธิ์ — resolveAccess() ไม่ได้ใช้ config เลย ปล่อยให้ loadEssential() โหลด config
-  // แยกไปเบื้องหลังทีหลัง (ฟอร์ม/หน้าจอที่ยังไม่มีสิทธิ์ใช้ค่า default ของ state.config ไปพลางก่อนได้)
-  // เพื่อให้ผู้ใช้เห็นหน้า "ขอสิทธิ์เข้าใช้งาน" ไวที่สุด แทนที่จะรอ 2 รอบเครือข่ายซ้อนกัน
-  await resolveAccess();
-}
-/* ระหว่างรอผู้ดูแลอนุมัติ ให้เช็คสิทธิ์ซ้ำเป็นระยะ พออนุมัติแล้วจะเข้าระบบให้เองโดยผู้ใช้ไม่ต้องทำอะไร */
+/* ระหว่างรอผู้ดูแลอนุมัติ ให้เช็คสิทธิ์ซ้ำเป็นระยะ พออนุมัติแล้วจะเข้าระบบให้เองโดยผู้ใช้ไม่ต้องทำอะไร
+   หน้านี้ยิง 2 คำขอต่อรอบ จึงต้องกันซ้อนและหยุดตอนแท็บถูกซ่อนด้วยเหตุผลเดียวกับ pollForUpdates
+   — คนที่ค้างอยู่หน้านี้แล้วเปิดทิ้งไว้ไม่ควรไปแย่งคิว Apps Script กับคนที่กำลังใช้งานจริง */
+let recheckInFlight = false;
 async function recheckAccess(manual){
   if(state.authStatus === 'ok') return;
+  if(recheckInFlight) return;
+  if(!manual && document.hidden) return;
+  recheckInFlight = true;
+  try{ await recheckAccessInner(manual); }
+  finally{ recheckInFlight = false; }
+}
+async function recheckAccessInner(manual){
   const before = state.authStatus;
   const beforeServerOk = state.lastCheck ? state.lastCheck.serverOk : null;
   if(manual) state.ui.deviceIdTried = true;
@@ -939,7 +1027,16 @@ async function loadEssential(){
   const cfg = await storeGet('config');
   state.config = cfg || state.config;
   if(!state.config.lineWebhooks) state.config.lineWebhooks = {};
-  state.loaded = true;
+  // เหมือน loadBackground: undefined = ดึงไม่สำเร็จ, null = เซิร์ฟเวอร์บอกว่ายังไม่มี config จริงๆ
+  // เดิมตั้ง state.loaded = true ทั้งสองกรณี ซึ่งอันตราย เพราะธงนี้คือสิ่งที่ปลดล็อกหน้าตั้งค่าให้ "แก้ไข"
+  // config ได้ — โหลดพลาดแล้วปลดล็อก = admin เปิดหน้าตั้งค่าเจอค่า default ที่ฝังในโค้ด (หรือสำเนาเก่า)
+  // แล้วกดบันทึก = เขียนทับแผนก/เครื่องจักร/ช่างตัวจริงบนชีตทิ้งทั้งชุด
+  if(cfg !== undefined){
+    state.loaded = true;
+    state.configFromCache = false;   // ของสดจากเซิร์ฟเวอร์มาถึงแล้ว ไม่ต้องอ้างสำเนาอีก
+  } else {
+    essentialLoadPromise = null;     // ให้ลองใหม่ได้ในครั้งถัดไป แทนที่จะจำผลที่ล้มเหลวไว้ทั้ง session
+  }
   // เขียน config เริ่มต้นกลับไปเฉพาะตอนเซิร์ฟเวอร์ตอบว่า "ยังไม่มี config เลยจริงๆ" (cfg === null)
   // ห้ามเขียนทับตอนแค่ดึงข้อมูลไม่สำเร็จ (cfg === undefined เช่น deploy ใหม่ยังไม่พร้อม/เน็ตหลุด)
   // มิฉะนั้นจะเผลอเขียนทับ config จริงบนเซิร์ฟเวอร์ (เช่น lineWebhooks ที่ตั้งไว้) ด้วยค่า default ว่างๆ
@@ -959,13 +1056,20 @@ async function loadBackground(){
   const [counters, orders, notifs] = await Promise.all([
     storeGet('counters'), storeGet('orders'), storeGet('notifications')
   ]);
-  state.counters = counters || {};
-  // ถ้าเปิดจากลิงก์แจ้งเตือนมาก่อน state.orders อาจมีใบที่ peek มาใบเดียวอยู่แล้ว — รายการเต็มที่โหลด
-  // มาตอนนี้ถูกต้องกว่าเสมอ แทนที่ตรงๆ ได้เลย
-  state.orders = orders || [];
-  state.notifications = notifs || [];
-  state.ordersLoaded = true;
+  if(counters !== undefined) state.counters = counters || {};
+  // storeGet คืน undefined เมื่อดึงไม่สำเร็จ (คนละความหมายกับ null ที่แปลว่า "ไม่มีคีย์นี้จริงๆ")
+  // เดิมโค้ดนี้ไม่ได้แยกสองกรณีนั้น พอโหลดพลาดจึงตั้ง state.orders = [] แล้วปลดล็อก ordersLoaded = true
+  // ตามไปด้วย = ปุ่มใดก็ตามที่กดหลังจากนั้นจะเขียนอาร์เรย์ว่างทับใบแจ้งซ่อมทั้งหมดบนชีต
+  // โหลดพลาดต้องไม่ปลดล็อกอะไรทั้งสิ้น — ปล่อยให้รอบ poll ถัดไปที่ได้ orders มาจริงเป็นคนปลดล็อกแทน
+  if(orders !== undefined && notifs !== undefined){
+    // ถ้าเปิดจากลิงก์แจ้งเตือนมาก่อน state.orders อาจมีใบที่ peek มาใบเดียวอยู่แล้ว (หรือรายการจาก
+    // สำเนาในเครื่อง) — รายการเต็มที่โหลดมาตอนนี้ถูกต้องกว่าเสมอ แทนที่ตรงๆ ได้เลย
+    state.orders = orders || [];
+    state.notifications = notifs || [];
+    state.ordersLoaded = true;
+  }
   render();
+  saveSnapshot(true);   // ของสดครบชุดแล้ว — เก็บไว้ให้รอบเปิดแอปครั้งหน้าวาดหน้าจอได้ทันที
   ensureNotifyRoutingReady();   // เริ่มโหลดล่วงหน้า ไม่ต้องรอ — ตัวที่ยิงแจ้งเตือนจะ await เองอีกที
 }
 /* ผู้รับแจ้งเตือน LINE (lineUserRoles + lineRecipients) — คนที่กดปุ่มในใบแจ้งซ่อมเป็นคนยิงแจ้งเตือนเอง
@@ -2020,10 +2124,14 @@ function renderHeader(){
 /* ============================= RENDER: NEW REQUEST ============================= */
 function renderNew(){
   const f = state.form;
-  const deptButtons = state.config.departments.map(d => `
+  // DEPT_DEFAULT/MACHINES_DEFAULT ที่ฝังในโค้ดเป็นแค่ placeholder ไม่ใช่ข้อมูลจริงจากชีต ถ้าโชว์ก่อน
+  // config มาถึงผู้ใช้จะเลือกแผนกที่ไม่มีอยู่จริงได้ (เคยเกิดขึ้นมาแล้ว — ดูคอมเมนต์ใน renderRequestAccess)
+  const deptButtons = configReady()
+    ? state.config.departments.map(d => `
     <button class="dept-btn ${f.dept===d.code?'selected':''}" onclick="selectDept('${d.code}')">
       ${d.code}<span class="full-name">${escapeHtml(d.name)}</span>
-    </button>`).join('');
+    </button>`).join('')
+    : `<span style="color:var(--slate-light); font-size:13px;">⏳ กำลังโหลดรายชื่อแผนก...</span>`;
 
   let machineSection = '';
   if(f.dept){
@@ -2887,12 +2995,12 @@ function renderRequestAccess(){
   // ไม่ใช่ข้อมูลจริงจากชีต ถ้าเอามาโชว์เป็นตัวเลือกจะทำให้ผู้ใช้เข้าใจผิดว่าเป็นรายชื่อจริง (เคยเกิดขึ้นมาแล้ว
   // — เห็นแค่ 4 แผนกชื่อภาษาอังกฤษ ทั้งที่ชีตจริงมี 9 แผนกชื่อภาษาไทย) จึงต้องรอ state.loaded ก่อนค่อยโชว์
   // รายการจริง ระหว่างรอให้ปิดช่องเลือกไว้พร้อมข้อความ "กำลังโหลด..." แทน
-  const configReady = state.loaded;
-  const deptOpts = configReady ? (state.config.departments || []).map(d =>
+  const cfgReady = configReady();
+  const deptOpts = cfgReady ? (state.config.departments || []).map(d =>
     `<option value="${escapeHtml(d.code)}" ${u.reqDept === d.code ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('') : '';
   const roleOpts = Object.keys(ROLES).filter(r => r !== 'admin').map(r =>
     `<option value="${r}" ${u.reqRole === r ? 'selected' : ''}>${ROLES[r].icon} ${ROLES[r].label}</option>`).join('');
-  const techOpts = configReady ? (state.config.technicians || []).map(t =>
+  const techOpts = cfgReady ? (state.config.technicians || []).map(t =>
     `<option value="${escapeHtml(t)}" ${u.reqTechName === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('') : '';
   return renderAuthShell(`
     <h2 class="view-title">ขอสิทธิ์เข้าใช้งาน</h2>
@@ -2904,8 +3012,8 @@ function renderRequestAccess(){
       </div>
       <div class="field">
         <label class="field-label">แผนก</label>
-        <select class="input" onchange="state.ui.reqDept=this.value" ${configReady ? '' : 'disabled'}>
-          <option value="">${configReady ? '— ไม่ระบุ —' : 'กำลังโหลดรายชื่อแผนก...'}</option>
+        <select class="input" onchange="state.ui.reqDept=this.value" ${cfgReady ? '' : 'disabled'}>
+          <option value="">${cfgReady ? '— ไม่ระบุ —' : 'กำลังโหลดรายชื่อแผนก...'}</option>
           ${deptOpts}
         </select>
       </div>
@@ -2916,8 +3024,8 @@ function renderRequestAccess(){
       ${u.reqRole === 'tech' ? `
       <div class="field">
         <label class="field-label">ชื่อช่าง (เลือกชื่อของท่านจากรายชื่อช่าง) <span class="req-star">*</span></label>
-        <select class="input" onchange="state.ui.reqTechName=this.value" ${configReady ? '' : 'disabled'}>
-          <option value="">${configReady ? '— กรุณาเลือก —' : 'กำลังโหลดรายชื่อช่าง...'}</option>
+        <select class="input" onchange="state.ui.reqTechName=this.value" ${cfgReady ? '' : 'disabled'}>
+          <option value="">${cfgReady ? '— กรุณาเลือก —' : 'กำลังโหลดรายชื่อช่าง...'}</option>
           ${techOpts}
         </select>
         <p class="desc" style="font-size:12px; color:var(--slate); margin:6px 0 0;">ต้องเลือกให้ตรงกับชื่อตัวเอง ระบบใช้ชื่อนี้ตรวจว่างานไหนเป็นงานที่มอบหมายให้ท่าน</p>
@@ -3000,10 +3108,9 @@ function render(){
   if(state.authStatus === 'guest'){ app.innerHTML = renderRequestAccess(); return; }
   if(state.authStatus === 'pending'){ app.innerHTML = renderPendingAccess(); return; }
   if(state.authStatus === 'rejected'){ app.innerHTML = renderRejectedAccess(); return; }
-  if(!state.loaded){
-    app.innerHTML = `<div style="padding:60px; text-align:center; color:var(--slate);">กำลังโหลดระบบ...</div>`;
-    return;
-  }
+  // เดิมตรงนี้บังหน้าจอทั้งหน้าด้วย "กำลังโหลดระบบ..." จนกว่า config จะมาถึง ทำให้ผู้ใช้ต้องรอคำขอที่ช้า
+  // ที่สุดก่อนเห็นอะไรเลย — ตอนนี้วาดโครงหน้าจอ (แถบหัว/เมนู/รายการ) ได้ทันที แล้วกั้นเป็นจุดๆ เฉพาะ
+  // ส่วนที่ต้องใช้ค่าจริงจาก config เท่านั้น
   const active = document.activeElement;
   const fid = active && app.contains(active) ? active.getAttribute('data-fid') : null;
   const selStart = fid && 'selectionStart' in active ? active.selectionStart : null;
@@ -3014,7 +3121,11 @@ function render(){
   else if(state.view==='list') body = renderList();
   else if(state.view==='detail') body = renderDetail();
   else if(state.view==='notif') body = renderNotif();
-  else if(state.view==='settings') body = state.role==='admin' ? renderSettings() : renderList();
+  // หน้าตั้งค่าเป็นหน้าเดียวที่ "แก้ไข" config ได้ จึงต้องรอ config ตัวจริงจากเซิร์ฟเวอร์ (state.loaded)
+  // เท่านั้น ห้ามใช้สำเนาในเครื่องเป็นฐาน ไม่งั้นกดบันทึกแล้วจะเขียนข้อมูลเก่าทับของจริงบนชีต
+  else if(state.view==='settings') body = state.role==='admin'
+    ? (state.loaded ? renderSettings() : `<div style="padding:60px; text-align:center; color:var(--slate);">กำลังโหลดข้อมูลตั้งค่า...</div>`)
+    : renderList();
   const updateBanner = state.updateAvailable ? `
     <div class="update-banner">
       🔄 มีการอัปเดตระบบเวอร์ชันใหม่ — กรุณารีเฟรชหน้าเพื่อใช้งานเวอร์ชันล่าสุด
@@ -3034,8 +3145,38 @@ function render(){
   }
 }
 
-/* ============================= LIVE POLLING (near real-time sync) ============================= */
+/* ============================= LIVE POLLING (near real-time sync) =============================
+   เดิมเป็น setInterval(pollForUpdates, 3000) ซึ่งเป็นต้นเหตุหลักที่ทำให้ "เปิดแอปทีนึงรอเป็นนาที":
+   หนึ่งรอบยิง 4 คำขอ = 1.33 คำขอ/วินาที ต่อ "หนึ่งแท็บที่เปิดค้าง" และ Web App ที่ deploy แบบ
+   Execute as: Me รันทุกคำขอในนามเจ้าของสคริปต์คนเดียว คำขอที่เกินโควตา simultaneous execution
+   จึงถูกเข้าคิว พนักงานไม่กี่คนเปิดค้างพร้อมกันก็ทำให้คิวโตเร็วกว่าที่ระบายได้ คนที่เพิ่งเปิดแอป
+   ต้องไปต่อท้ายคิวนั้น ซ้ำร้าย setInterval ไม่สนว่ารอบก่อนเสร็จหรือยัง — เกิน 3 วิ ก็ยิงทับซ้อนไปเรื่อยๆ
+
+   ของใหม่แก้สามอย่างพร้อมกัน:
+   1) เป็น setTimeout ลูกโซ่ + ธง pollInFlight — รอบใหม่เริ่มได้ก็ต่อเมื่อรอบก่อนจบแล้วเท่านั้น
+      ยิงทับซ้อนไม่ได้อีกโดยโครงสร้าง
+   2) ถอยห่างอัตโนมัติตามเวลาที่เซิร์ฟเวอร์ใช้จริง — เซิร์ฟเวอร์ตอบช้าแปลว่าคิวกำลังยาว ยิ่งยิงถี่ยิ่ง
+      ซ้ำเติม จึงยืดรอบออกเป็น ~4 เท่าของเวลาที่เพิ่งใช้ไป (คุมไว้ระหว่าง 15–90 วิ) พอคิวโล่งก็หดกลับเอง
+   3) แท็บที่ถูกซ่อน (สลับแอป/พับจอ) หยุดยิงทั้งหมด — ไม่มีใครดูอยู่ ไม่ต้องแย่งคิวกับคนที่กำลังใช้งานจริง
+      พอกลับมาที่แท็บ visibilitychange จะยิงรอบใหม่ให้ทันที ผู้ใช้จึงไม่รู้สึกว่าข้อมูลเก่า */
+const POLL_MIN = 15000;
+const POLL_MAX = 90000;
+let pollDelay = POLL_MIN;
+let pollInFlight = false;
+function startPolling(){
+  const tick = async () => {
+    if(!document.hidden && !pollInFlight){
+      const t0 = Date.now();
+      await pollForUpdates();
+      pollDelay = Math.min(POLL_MAX, Math.max(POLL_MIN, (Date.now() - t0) * 4));
+    }
+    setTimeout(tick, pollDelay);
+  };
+  setTimeout(tick, pollDelay);
+}
 async function pollForUpdates(){
+  if(pollInFlight) return;
+  pollInFlight = true;
   try{
     // lineUsers/lineUserRoles/lineRecipients ใช้แค่หน้าตั้งค่าของ admin — โหลด/poll แค่ตอนเคยเข้าหน้านั้น
     // แล้วเท่านั้น (state.lineDataLoaded) คนอื่นๆ ไม่ต้องยิง 3 คำขอนี้ทุก 3 วิให้เสียเวลาเปล่า
@@ -3056,6 +3197,9 @@ async function pollForUpdates(){
     // กันเหนียว: ถ้า loadBackground() พลาดไปด้วยเหตุผลใดก็ตาม รอบ poll ถัดไปที่ได้ orders มาจริง
     // จะปลดล็อกปุ่มบันทึกต่างๆ ให้เองแทน ไม่ต้องรอ refresh หน้า
     if(orders && !state.ordersLoaded) state.ordersLoaded = true;
+    // เช่นเดียวกับ config: ถ้า loadEssential() พลาดไป (เน็ตกระตุกตอนเปิดแอป) รอบ poll ที่ได้ config
+    // มาจริงจะปลดล็อกหน้าตั้งค่าและรายชื่อแผนกให้เอง ไม่ต้องให้ผู้ใช้รีเฟรชหน้า
+    if(cfg && !state.loaded){ state.loaded = true; state.configFromCache = false; changed = true; }
     // คำขอสิทธิ์: ให้ admin เห็นคำขอใหม่สดๆ และถ้าสิทธิ์ของตัวเองถูกแก้/ถอนระหว่างใช้งานก็ปรับตามทันที
     if(reqs && JSON.stringify(reqs) !== JSON.stringify(state.accessRequests)){
       const grantSig = r => r ? `${r.status}|${(r.roles || []).join(',')}|${r.techName || ''}` : '';
@@ -3064,12 +3208,14 @@ async function pollForUpdates(){
       state.myRequest = requestFor(state.didHash, reqs);
       if(grantSig(state.myRequest) !== before){
         await resolveAccess();   // สิทธิ์อาจยังเหลือจากชีตอยู่ จึงต้องประเมินใหม่ทั้งสองแหล่ง
-        if(state.authStatus !== 'ok'){ location.reload(); return; }
+        // ล้างสำเนาในเครื่องก่อนรีโหลดเสมอ ไม่งั้นรอบหน้าจะวาดหน้าจอจากสิทธิ์เก่าที่เพิ่งถูกถอนไป
+        if(state.authStatus !== 'ok'){ clearSnapshot(); location.reload(); return; }
       }
       changed = true;
     }
-    if(changed) render();
+    if(changed){ render(); saveSnapshot(); }
   }catch(e){ /* silent - next poll retries */ }
+  finally{ pollInFlight = false; }
 }
 
 /* แท็บที่เปิดค้างไว้นานจะยังรันโค้ด JS เดิมในหน่วยความจำต่อไปเรื่อยๆ แม้ index.html บนเซิร์ฟเวอร์จะอัปเดตแล้ว
@@ -3077,6 +3223,7 @@ async function pollForUpdates(){
    แล้วเตือนให้ผู้ใช้รีเฟรชเอง แทนที่จะรีโหลดอัตโนมัติ (จะได้ไม่ขัดจังหวะระหว่างกรอกฟอร์ม) */
 async function checkForUpdate(){
   if(state.updateAvailable) return;
+  if(document.hidden) return;   // ดึงไฟล์ทั้งไฟล์แบบ no-store — ไม่ต้องเสียเน็ตให้แท็บที่ไม่มีใครดู
   try{
     const res = await fetch(location.pathname + '?_v=' + Date.now(), { cache:'no-store' });
     const text = await res.text();
@@ -3098,7 +3245,10 @@ let appStarted = false;
 async function startApp(){
   if(appStarted) return;
   appStarted = true;
-  await ensureEssentialLoaded();
+  // ไม่ await — doGet('config') ต้องอ่าน 3 แท็บชีตสดๆ จึงเป็นคำขอที่ช้าที่สุด การรอมันก่อนวาดหน้าจอ
+  // เท่ากับต่อคลื่นเครือข่ายเข้าไปใน critical path อีกหนึ่งชั้นโดยไม่จำเป็น — ทุกจุดที่ต้องใช้ค่าจริงจาก
+  // config เช็ค configReady()/state.loaded เองอยู่แล้ว (ดู renderNew/renderRequestAccess/หน้าตั้งค่า)
+  ensureEssentialLoaded().then(render);
   render();
 
   const params = new URLSearchParams(location.search);
@@ -3114,7 +3264,13 @@ async function startApp(){
     // ลัดคิว: ขอใบนี้ใบเดียวจากเซิร์ฟเวอร์ก่อน ให้เห็นหน้ารายละเอียดไวๆ ระหว่างที่รายการเต็มโหลดเบื้องหลัง
     // อยู่ (ปุ่มที่ต้องบันทึกจะถูกซ่อนไว้จนกว่า loadBackground() จะเสร็จ ดู renderDetail())
     const peeked = await getOrderById(linkOrderId);
-    if(peeked){ state.orders = [peeked]; await openDetail(linkOrderId); }
+    if(peeked){
+      // รวมเข้ากับรายการที่มีอยู่ (อาจมาจากสำเนาในเครื่อง) แทนที่จะแทนที่ทั้งก้อนด้วยใบเดียว —
+      // ใบที่ขอมาสดกว่าเสมอจึงทับของเดิมที่ id เดียวกัน ส่วนใบอื่นๆ ยังอยู่ให้ผู้ใช้กดดูต่อได้ทันที
+      const rest = state.orders.filter(o => o.id !== peeked.id);
+      state.orders = [peeked, ...rest];
+      await openDetail(linkOrderId);
+    }
     else render();
   } else if(linkView === 'settings' && state.role === 'admin'){
     history.replaceState(null, '', location.pathname);
@@ -3124,16 +3280,30 @@ async function startApp(){
     render();
   }
   loadBackground(); // ไม่ await — โหลดเบื้องหลัง ไม่บล็อกหน้าจอ
-  setInterval(pollForUpdates, 3000);
+  startPolling();
   setInterval(checkForUpdate, 120000);
   // รีเฟรชทันทีเมื่อผู้ใช้กลับมาที่แท็บนี้ (สลับแท็บ/แอปแล้วกลับมา) แทนที่จะรอรอบ poll ถัดไป
-  document.addEventListener('visibilitychange', () => { if(!document.hidden) pollForUpdates(); });
+  // — สำคัญเป็นพิเศษตอนนี้ เพราะรอบ poll หยุดสนิทระหว่างที่แท็บถูกซ่อน
+  document.addEventListener('visibilitychange', () => { if(!document.hidden){ pollDelay = POLL_MIN; pollForUpdates(); } });
 }
 
 (async function init(){
-  await authenticate();
+  // เริ่มจากสำเนาในเครื่องก่อนเสมอ ถ้ามี — วาดหน้าจอได้ทันทีโดยไม่แตะเครือข่ายเลย แล้วค่อยเช็คสิทธิ์
+  // และโหลดของสดทับเบื้องหลัง ผู้ใช้จึงไม่ต้องนั่งดู "กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…" ระหว่างรอคิว Apps Script
+  state.deviceId = getDeviceId();
+  state.didHash = await sha256Hex(state.deviceId);
+  const bootedFromCache = applySnapshot(readSnapshot());
+  if(bootedFromCache){
+    render();
+    startApp();   // ไม่ await — ให้การเช็คสิทธิ์ของจริงข้างล่างเดินคู่ขนานไปเลย
+  }
+
+  await resolveAccess();   // คำตอบจากเซิร์ฟเวอร์ชนะสำเนาเสมอ
   render();
   if(state.authStatus !== 'ok'){
+    // เคยบูตจากสำเนาแล้วแต่เซิร์ฟเวอร์บอกว่าไม่มีสิทธิ์จริง (ถูกถอนสิทธิ์/สำเนาไม่ตรงกับของจริง)
+    // — ล้างสำเนาแล้วเริ่มใหม่หมด เพราะตอนนี้แอปเดินมาไกลเกินกว่าจะถอยกลับหน้าขอสิทธิ์อย่างสะอาด
+    if(bootedFromCache){ clearSnapshot(); location.reload(); return; }
     // หน้า "ขอสิทธิ์เข้าใช้งาน" ใช้ config (แผนก/ชื่อช่าง) ในดรอปดาวน์ — โหลดเบื้องหลังไม่บล็อกฟอร์ม
     // (เดิมหน้านี้ไม่เคยโหลด config เลย เลยโชว์รายชื่อ default ที่ฝังไว้ในโค้ด ไม่ใช่ของจริงจากชีต)
     ensureEssentialLoaded().then(render);
