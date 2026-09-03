@@ -23,6 +23,13 @@
  */
 
 /* ============================== CONFIG ============================== */
+// เวอร์ชันของโค้ดชุดนี้ — ตอบกลับไปทุกคำขอ เพื่อให้แอป (index.html) รู้ได้ทันทีว่า Apps Script
+// ที่ deploy อยู่จริงเป็นโค้ดรุ่นไหน ต้องตรงกับ RELAY_CODE_VERSION ใน index.html
+// !! บั๊มค่านี้ทุกครั้งที่แก้ไฟล์นี้ และต้องบั๊ม RELAY_CODE_VERSION ใน index.html ให้ตรงกันด้วย !!
+// เหตุผล: อาการ "แอปเห็นผู้รับ 2 คน แต่ relay บอกไม่มีผู้รับ" เกิดจากโค้ดใน Apps Script เป็น
+// เวอร์ชันเก่ากว่าไฟล์นี้ (ไฟล์นี้ไม่ได้รันเอง ต้องคัดลอกไปวางแล้ว Deploy ใหม่ทุกครั้ง)
+var RELAY_VERSION = '2026-09-03.1';
+
 // อ่านจาก Script properties ก่อน แล้วค่อยตกมาใช้ค่าใน const (เผื่อยังไม่ได้ตั้ง properties)
 var PROPS = PropertiesService.getScriptProperties();
 
@@ -64,11 +71,11 @@ var KV_SHEET         = 'KV';
 function doPost(e){
   try{
     if(!e || !e.postData || !e.postData.contents){
-      return json_({ ok:false, error:'no post body' });
+      return json_({ ok:false, version:RELAY_VERSION, sent:0, targets:0, error:'no post body' });
     }
     var body;
     try{ body = JSON.parse(e.postData.contents); }
-    catch(err){ log_('doPost', 'JSON ไม่ถูกต้อง: ' + err); return json_({ ok:false, error:'bad json' }); }
+    catch(err){ log_('doPost', 'JSON ไม่ถูกต้อง: ' + err); return json_({ ok:false, version:RELAY_VERSION, sent:0, targets:0, error:'bad json' }); }
 
     // --- 1) event จาก LINE (คนทักเข้ามา / กดเพิ่มเพื่อน) ---
     if(body.events){
@@ -78,7 +85,7 @@ function doPost(e){
         try{ if(handleLineEvent_(body.events[i])) n++; }
         catch(err){ log_('event', 'พลาด: ' + err + ' | ' + safeJson_(body.events[i])); }
       }
-      return json_({ ok:true, logged:n });
+      return json_({ ok:true, version:RELAY_VERSION, logged:n });
     }
 
     // --- 2) คำขอส่งแจ้งเตือนจากตัวแอป (index.html) ---
@@ -86,10 +93,11 @@ function doPost(e){
       return json_(handleNotifyRequest_(body));
     }
 
-    return json_({ ok:false, error:'unrecognised payload' });
+    return json_({ ok:false, version:RELAY_VERSION, sent:0, targets:0,
+      error:'unrecognised payload', note:'relay ได้รับข้อมูลที่ไม่ใช่ทั้ง event ของ LINE และคำขอส่งแจ้งเตือน (ต้องมีอย่างน้อย message และ role หรือ userIds)' });
   }catch(err){
     log_('doPost', 'พังทั้งก้อน: ' + err);
-    return json_({ ok:false, error:String(err) });
+    return json_({ ok:false, version:RELAY_VERSION, sent:0, targets:0, error:String(err) });
   }
 }
 
@@ -102,14 +110,14 @@ function doGet(e){
   if(key === 'selftest') return json_(selfTest_());
   // ซิงก์แท็บ LINE Users + แท็บผู้รับ เข้า KV ให้แอปอ่านได้ทันทีหลังแก้แถวในชีต
   if(key === 'sync'){
-    try{ syncRecipientsNow(); return json_({ ok:true, synced:['lineUsers','lineRecipients'] }); }
-    catch(err){ return json_({ ok:false, error:String(err) }); }
+    try{ syncRecipientsNow(); return json_({ ok:true, version:RELAY_VERSION, synced:['lineUsers','lineRecipients'] }); }
+    catch(err){ return json_({ ok:false, version:RELAY_VERSION, error:String(err) }); }
   }
-  return json_({ ok:true, service:'LineOA MT relay', hint:'ใช้ ?key=selftest เพื่อตรวจการตั้งค่า, ?key=sync เพื่อซิงก์รายชื่อผู้รับเข้าแอป' });
+  return json_({ ok:true, service:'LineOA MT relay', version:RELAY_VERSION, hint:'ใช้ ?key=selftest เพื่อตรวจการตั้งค่า, ?key=sync เพื่อซิงก์รายชื่อผู้รับเข้าแอป' });
 }
 
 function selfTest_(){
-  var r = { ok:true, checks:{} };
+  var r = { ok:true, version:RELAY_VERSION, checks:{} };
 
   // ตรวจว่าเปิดสเปรดชีตตาม SPREADSHEET_ID ได้จริง (ข้อผิดพลาดยอดฮิตหลังย้ายบัญชี Google)
   var ss = null;
@@ -479,20 +487,25 @@ function syncRecipientsNow(){
 
 function handleNotifyRequest_(body){
   var ids = [];
+  var fromApp = 0, fromSheet = 0;
 
   // แอปส่ง userIds มาให้ตรงๆ (มาจากคำขอสิทธิ์ที่ผูก LINE ไว้ / lineUserRoles / lineRecipients)
   if(Array.isArray(body.userIds) && body.userIds.length){
     ids = body.userIds.filter(function(x){ return x && String(x).trim(); });
+    fromApp = ids.length;
   }
   // ไม่มีก็ค่อยไปดูตารางผู้รับในชีต
-  if(!ids.length && body.role) ids = recipientsForRole_(body.role);
+  if(!ids.length && body.role){
+    ids = recipientsForRole_(body.role);
+    fromSheet = ids.length;
+  }
   // body.alsoSheet = แอปสั่งให้ "รวม" แถวตามบทบาทในชีตเข้ากับ userIds ที่ส่งมาด้วย แทนที่จะข้าม
   // ชีตทันทีที่ userIds ไม่ว่าง — เดิมคนที่มีแต่แถวในชีตจะถูกตัดทิ้งทั้งที่ตั้งค่าไว้ถูกต้องแล้ว
   // (คีย์ KV "lineRecipients" ที่แอปใช้รวมเองไม่เคยมีใครเขียน ดู mirrorRecipientsToKv_)
   else if(body.alsoSheet && body.role){
     var extra = recipientsForRole_(body.role);
     for(var k = 0; k < extra.length; k++){
-      if(ids.indexOf(extra[k]) === -1) ids.push(extra[k]);
+      if(ids.indexOf(extra[k]) === -1){ ids.push(extra[k]); fromSheet++; }
     }
   }
   // กันชื่อซ้ำ: คนเดียวกันอาจมาทั้งจาก userIds ของแอปและจากแถวในชีต จะได้ไม่โดนส่งซ้ำสองข้อความ
@@ -506,15 +519,35 @@ function handleNotifyRequest_(body){
   // ไม่มีผู้รับ = ไม่ส่ง (ตั้งใจ — เดิม fallback เป็น broadcast หาเพื่อนทุกคนใน OA)
   if(!ids.length){
     log_('notify', 'ไม่มีผู้รับสำหรับ role="' + (body.role || '') + '" — ข้ามการส่ง');
-    return { ok:true, sent:0, note:'no recipient mapped' };
+    return { ok:true, version:RELAY_VERSION, sent:0, targets:0, fromApp:0, fromSheet:0,
+      note:'ไม่พบผู้รับ: แอปไม่ได้ส่ง userIds มา และไม่มีแถวที่บทบาท="' + (body.role || '') + '" ในแท็บ "' + RECIPIENTS_SHEET + '"' };
   }
 
-  var sent = 0;
+  // ส่งทีละคน และ "เก็บสาเหตุที่ส่งไม่ผ่าน" ไว้ตอบกลับให้แอปโชว์ได้เลย
+  // เดิมความล้มเหลวของ LINE (token หมดอายุ / userId ผิด / ยังไม่ได้เป็นเพื่อนกับ OA) ถูกกลืนไว้ใน
+  // แท็บ Relay Log เท่านั้น แอปจึงเห็นแค่ sent:0 แล้วเดาผิดว่า "ไม่พบผู้รับ" — พาไปแก้ผิดจุดทุกครั้ง
+  var sent = 0, errors = [];
   for(var i = 0; i < ids.length; i++){
-    try{ if(pushTo_(ids[i], body.message)) sent++; }
-    catch(err){ log_('notify', 'ส่งไม่สำเร็จถึง ' + ids[i] + ': ' + err); }
+    var r;
+    try{ r = pushTo_(ids[i], body.message); }
+    catch(err){ r = { ok:false, code:0, message:String(err) }; }
+    if(r.ok) sent++;
+    else{
+      log_('notify', 'ส่งไม่สำเร็จถึง ' + ids[i] + ': HTTP ' + r.code + ' ' + r.message);
+      if(errors.length < 5) errors.push({ userId: maskId_(ids[i]), code: r.code, message: String(r.message).slice(0, 160) });
+    }
   }
-  return { ok:true, sent:sent, targets:ids.length };
+  var note = '';
+  if(!sent) note = 'มีผู้รับ ' + ids.length + ' คน แต่ LINE ปฏิเสธการส่งทั้งหมด';
+  else if(errors.length) note = 'ส่งได้ ' + sent + ' จาก ' + ids.length + ' คน';
+  return { ok:true, version:RELAY_VERSION, sent:sent, targets:ids.length,
+    fromApp:fromApp, fromSheet:fromSheet, errors:errors, note:note };
+}
+
+/** ปิดบัง userId ก่อนส่งกลับไปโชว์ในแอป — พอให้ไล่ได้ว่าเป็นแถวไหน แต่ไม่หลุดทั้งตัว */
+function maskId_(id){
+  var s = String(id || '');
+  return s.length > 12 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
 }
 
 function recipientsForRole_(role){
@@ -531,19 +564,29 @@ function recipientsForRole_(role){
   return out;
 }
 
+/** ส่งข้อความหาคนเดียว — คืน { ok, code, message } เพื่อให้ผู้เรียกรายงานสาเหตุที่แท้จริงต่อได้
+    (เดิมคืน true/false เฉยๆ สาเหตุจึงหายไปหมด ทั้งที่ LINE บอกมาชัดเจนว่าติดอะไร) */
 function pushTo_(userId, message){
+  var token = accessToken_();
+  if(!token){
+    return { ok:false, code:0, message:'ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN ใน Script properties' };
+  }
   var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
     method:'post',
     contentType:'application/json',
-    headers:{ Authorization:'Bearer ' + accessToken_() },
+    headers:{ Authorization:'Bearer ' + token },
     payload: JSON.stringify({ to:userId, messages:[{ type:'text', text:String(message).slice(0, 4900) }] }),
     muteHttpExceptions:true
   });
-  if(res.getResponseCode() !== 200){
-    log_('push', 'HTTP ' + res.getResponseCode() + ' → ' + userId + ' : ' + res.getContentText().slice(0, 200));
-    return false;
+  var code = res.getResponseCode();
+  if(code !== 200){
+    var text = res.getContentText();
+    var msg = text;
+    try{ var j = JSON.parse(text); if(j && j.message) msg = j.message; }catch(e){ /* ไม่ใช่ JSON ใช้ข้อความดิบ */ }
+    log_('push', 'HTTP ' + code + ' → ' + userId + ' : ' + String(text).slice(0, 200));
+    return { ok:false, code:code, message:String(msg).slice(0, 200) };
   }
-  return true;
+  return { ok:true, code:200, message:'' };
 }
 
 /* ============================== HELPERS ============================== */
