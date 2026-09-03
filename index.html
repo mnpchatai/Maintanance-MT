@@ -448,23 +448,25 @@ const INSPECTOR_OPINION_META = {
    กติกา: หมุดต้องบันทึกเรียงตามลำดับ ข้ามขั้นไม่ได้ (บังคับทั้งในปุ่มและใน saveOpinionStep
    เผื่อหน้าจอค้างอยู่กับข้อมูลเก่า) และห้ามแตะ o.status — สถานะใบยังเดินตามเส้นทางเดิม
    (มอบหมาย → กำลังซ่อม → รอตรวจรับ) หมุดพวกนี้เป็นข้อมูลประกอบที่วิ่งคู่กันไปเท่านั้น */
+/* pendingLabel = "ขั้นนี้ยังไม่ถูกบันทึก แปลว่าใบนี้กำลังรออะไรอยู่" ใช้โชว์คู่กับสถานะใบ
+   ซ่อมเองไม่ต้องรอของหรือรอใครจากข้างนอก จึงเว้นว่างไว้ทั้งสองขั้น (ไม่ต้องมีป้ายรอ) */
 const OPINION_STEPS = {
   send_repair: [
-    { key:'sent',     label:'เริ่มส่งซ่อม',           dateLabel:'วันที่ส่งซ่อม',              btn:'📤 บันทึกวันที่ส่งซ่อม',        doneLabel:'ส่งซ่อมแล้ว',   notify:'ส่งเครื่องจักร/อุปกรณ์ออกไปซ่อมแล้ว' },
-    { key:'repaired', label:'ซ่อมเสร็จ / รับของกลับ', dateLabel:'วันที่ซ่อมเสร็จ / รับของกลับ', btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', notify:'งานที่ส่งซ่อมเสร็จเรียบร้อย และรับของกลับแล้ว' },
+    { key:'sent',     label:'เริ่มส่งซ่อม',           dateLabel:'วันที่ส่งซ่อม',              btn:'📤 บันทึกวันที่ส่งซ่อม',        doneLabel:'ส่งซ่อมแล้ว',   pendingLabel:'รอส่งออกไปซ่อม',        notify:'ส่งเครื่องจักร/อุปกรณ์ออกไปซ่อมแล้ว' },
+    { key:'repaired', label:'ซ่อมเสร็จ / รับของกลับ', dateLabel:'วันที่ซ่อมเสร็จ / รับของกลับ', btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'รอของกลับจากที่ส่งซ่อม', notify:'งานที่ส่งซ่อมเสร็จเรียบร้อย และรับของกลับแล้ว' },
   ],
   external: [
-    { key:'booked',   label:'นัดหมายช่างภายนอก',      dateLabel:'วันที่นัดหมาย',              btn:'📞 บันทึกวันที่นัดช่างภายนอก',   doneLabel:'นัดช่างแล้ว',   notify:'นัดหมายช่างภายนอกเข้าซ่อมเรียบร้อยแล้ว' },
-    { key:'arrived',  label:'ช่างภายนอกเข้าดำเนินการ', dateLabel:'วันที่ช่างเข้าดำเนินการ',     btn:'🧰 บันทึกวันที่ช่างเข้าดำเนินการ', doneLabel:'ช่างเข้าแล้ว',  notify:'ช่างภายนอกเข้าดำเนินการซ่อมแล้ว' },
-    { key:'finished', label:'ช่างภายนอกซ่อมเสร็จ',    dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', notify:'ช่างภายนอกซ่อมเสร็จเรียบร้อยแล้ว' },
+    { key:'booked',   label:'นัดหมายช่างภายนอก',      dateLabel:'วันที่นัดหมาย',              btn:'📞 บันทึกวันที่นัดช่างภายนอก',   doneLabel:'นัดช่างแล้ว',   pendingLabel:'รอนัดช่างภายนอก',       notify:'นัดหมายช่างภายนอกเข้าซ่อมเรียบร้อยแล้ว' },
+    { key:'arrived',  label:'ช่างภายนอกเข้าดำเนินการ', dateLabel:'วันที่ช่างเข้าดำเนินการ',     btn:'🧰 บันทึกวันที่ช่างเข้าดำเนินการ', doneLabel:'ช่างเข้าแล้ว',  pendingLabel:'รอช่างภายนอกเข้ามา',    notify:'ช่างภายนอกเข้าดำเนินการซ่อมแล้ว' },
+    { key:'finished', label:'ช่างภายนอกซ่อมเสร็จ',    dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'รอช่างภายนอกซ่อมเสร็จ', notify:'ช่างภายนอกซ่อมเสร็จเรียบร้อยแล้ว' },
   ],
   self_repair: [
-    { key:'started',  label:'เริ่มลงมือซ่อมเอง',       dateLabel:'วันที่เริ่มซ่อม',             btn:'▶ บันทึกวันที่เริ่มซ่อม',        doneLabel:'เริ่มซ่อมแล้ว', notify:'เริ่มลงมือซ่อมเองแล้ว' },
-    { key:'finished', label:'ซ่อมเองเสร็จ',           dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', notify:'ซ่อมเองเสร็จเรียบร้อยแล้ว' },
+    { key:'started',  label:'เริ่มลงมือซ่อมเอง',       dateLabel:'วันที่เริ่มซ่อม',             btn:'▶ บันทึกวันที่เริ่มซ่อม',        doneLabel:'เริ่มซ่อมแล้ว', pendingLabel:'',                     notify:'เริ่มลงมือซ่อมเองแล้ว' },
+    { key:'finished', label:'ซ่อมเองเสร็จ',           dateLabel:'วันที่ซ่อมเสร็จ',            btn:'✓ บันทึกวันที่ซ่อมเสร็จ',       doneLabel:'ซ่อมเสร็จแล้ว', pendingLabel:'',                     notify:'ซ่อมเองเสร็จเรียบร้อยแล้ว' },
   ],
   buy_parts: [
-    { key:'ordered',   label:'สั่งของเรียบร้อย',       dateLabel:'วันที่สั่งซื้อ',              btn:'🧾 บันทึกว่าสั่งของเรียบร้อย',   doneLabel:'สั่งของแล้ว',   notify:'สั่งซื้ออุปกรณ์เรียบร้อยแล้ว รอของมาส่ง' },
-    { key:'delivered', label:'ของมาส่งเรียบร้อย',      dateLabel:'วันที่ของมาส่ง',             btn:'📦 บันทึกว่าของมาส่งเรียบร้อย',  doneLabel:'ของมาส่งแล้ว',  notify:'อุปกรณ์ที่สั่งซื้อมาส่งเรียบร้อยแล้ว พร้อมดำเนินการซ่อม' },
+    { key:'ordered',   label:'สั่งของเรียบร้อย',       dateLabel:'วันที่สั่งซื้อ',              btn:'🧾 บันทึกว่าสั่งของเรียบร้อย',   doneLabel:'สั่งของแล้ว',   pendingLabel:'รอสั่งซื้ออุปกรณ์',     notify:'สั่งซื้ออุปกรณ์เรียบร้อยแล้ว รอของมาส่ง' },
+    { key:'delivered', label:'ของมาส่งเรียบร้อย',      dateLabel:'วันที่ของมาส่ง',             btn:'📦 บันทึกว่าของมาส่งเรียบร้อย',  doneLabel:'ของมาส่งแล้ว',  pendingLabel:'รออุปกรณ์มาส่ง',        notify:'อุปกรณ์ที่สั่งซื้อมาส่งเรียบร้อยแล้ว พร้อมดำเนินการซ่อม' },
   ],
 };
 
@@ -529,7 +531,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.6';
+const APP_VERSION = '2026-09-03.7';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -2297,6 +2299,23 @@ function latestOpinionStep(o){
   for(const s of steps){ if(done[s.key]) last = s; else break; }
   return last;
 }
+/* ขั้นแรกที่ยังไม่ถูกบันทึก = สิ่งที่ใบนี้ "ค้างรออยู่" ตอนนี้ (null = ครบทุกขั้นแล้ว หรือใบนี้
+   ไม่มีแนวทางที่ต้องตามหมุด) */
+function opinionPendingStep(o){
+  const steps = opinionStepsFor(o.maintRecord && o.maintRecord.inspectorOpinion);
+  const done = opinionProgressOf(o);
+  return steps.find(s => !done[s.key]) || null;
+}
+/* ป้าย "รออะไรอยู่" ที่โชว์คู่กับสถานะใบ — หน้างานจริงเกิดได้ทั้งสองแบบ คือช่างเริ่มซ่อมไปก่อน
+   ด้วยอุปกรณ์ที่มีระหว่างรอของมาส่ง กับยังเริ่มไม่ได้เลยเพราะรอของ ทั้งสองแบบถูกต้องทั้งคู่
+   จึงไม่บล็อกปุ่มเริ่มซ่อม แต่ต้องแยกให้ออกว่าใบที่ขึ้น "กำลังซ่อม" อยู่นั้นเดินอยู่จริง
+   หรือค้างรอของ — เดิมสองอย่างนี้หน้าตาเหมือนกันเป๊ะ
+   โชว์เฉพาะใบที่ยังอยู่ในช่วงทำงาน ใบที่ส่งตรวจรับ/ปิดไปแล้วไม่ต้องมาเตือนว่ารอของ */
+function opinionWaitingLabel(o){
+  if(o.status !== 'ASSIGNED' && o.status !== 'IN_PROGRESS') return '';
+  const s = opinionPendingStep(o);
+  return (s && s.pendingLabel) || '';
+}
 /* ใครกดอัปเดตหมุดได้: ผจก.แผนกซ่อมบำรุง (รวม admin ผ่าน hasRole) และช่างที่ถูกมอบหมายใบนี้
    — สองกลุ่มนี้คือคนที่รู้จริงว่าของส่งออกไปหรือมาส่งแล้ว ผู้แจ้ง/ผู้อนุมัติดูได้อย่างเดียว */
 function canUpdateOpinionProgress(o){
@@ -2359,10 +2378,22 @@ async function saveOpinionStep(id){
 async function notifyOpinionStep(o, step, date, note, isEdit){
   const head = (isEdit ? '[แก้ไขข้อมูล] ' : '') + INSPECTOR_OPINION_META[o.opinionProgress.opinion] + ': ';
   const body = step.notify + ' (' + step.dateLabel + ' ' + fmtDate(date) + ')' + (note ? '\nหมายเหตุ: ' + note : '');
-  await notifyOrderRequester(o, head + body);
-  await pushNotification('maint', o.id, o.docNumber, head + body);
+  // เพิ่งบันทึกหมุดสุดท้ายครบ = ของมาถึง/งานกลับมาแล้ว บอกก้าวถัดไปให้ชัดในข้อความเลย
+  // ข้อความต่างกันตามว่าช่างเริ่มซ่อมไปก่อนแล้วหรือยัง — สองกรณีนี้เกิดจริงทั้งคู่หน้างาน
+  let hint = '', techHint = '';
+  if(!isEdit && !opinionPendingStep(o)){
+    if(o.status === 'ASSIGNED'){
+      hint = '\n✅ พร้อมเริ่มดำเนินการซ่อมแล้ว';
+      techHint = hint + ' — เปิดใบแล้วกด "▶ เริ่มดำเนินการซ่อม"';
+    } else if(o.status === 'IN_PROGRESS'){
+      hint = '\n✅ ของครบแล้ว ช่างดำเนินการซ่อมต่อได้เลย';
+      techHint = hint;
+    }
+  }
+  await notifyOrderRequester(o, head + body + hint);
+  await pushNotification('maint', o.id, o.docNumber, head + body + hint);
   for(const tech of assignedTechs(o)){
-    await sendLineToTech(tech, '[' + o.docNumber + '] ' + head + body
+    await sendLineToTech(tech, '[' + o.docNumber + '] ' + head + body + techHint
       + '\nเครื่องจักร: ' + o.machineCode + ' — ' + o.machineName + '\n' + orderDeepLink(o.id, 'tech'));
   }
 }
@@ -2659,10 +2690,15 @@ function renderList(){
   const cards = orders.map(o => {
     const meta = STATUS_META[o.status];
     // ป้ายสรุปความคืบหน้าของแนวทางที่เลือกไว้ — เห็นได้จากรายการเลยว่าใบไหนติดอยู่ที่รอของ/รอส่งซ่อม
+    // ใบที่ยังค้างรออะไรอยู่ให้ขึ้นป้าย "รอ..." ก่อน (นั่นคือสิ่งที่ต้องตามงาน) ครบแล้วค่อย
+    // แสดงหมุดล่าสุดที่ทำไป — สำคัญกับใบที่ขึ้น "กำลังซ่อม" ทั้งที่จริงๆ ยังรอของอยู่
+    const opWaiting = opinionWaitingLabel(o);
     const opStep = latestOpinionStep(o);
-    const opPill = opStep
-      ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${INSPECTOR_OPINION_META[o.maintRecord.inspectorOpinion]}: ${escapeHtml(opStep.doneLabel)}</span>`
-      : '';
+    const opPill = opWaiting
+      ? `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd;">⏳ ${escapeHtml(opWaiting)}</span>`
+      : opStep
+        ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${INSPECTOR_OPINION_META[o.maintRecord.inspectorOpinion]}: ${escapeHtml(opStep.doneLabel)}</span>`
+        : '';
     return `
     <div class="order-card" style="border-left-color:${meta.color}">
       <div class="order-top">
@@ -2745,6 +2781,15 @@ function renderDetail(){
     neededDateCell = fmtDate(o.neededDate) + urgentBadge +
       (state.role === 'admin' ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="openEditNeededDate('${o.id}')">✎ แก้ไข</button>` : '');
   }
+
+  // "รออะไรอยู่" — โชว์คู่กับสถานะใบทั้งที่หัวใบ กล่องของช่าง และการ์ดในหน้ารายการ
+  // ตั้งใจไม่ล็อกปุ่มเริ่ม/จบซ่อมไว้กับหมุดพวกนี้ เพราะหน้างานจริงเกิดได้ทั้งสองแบบ:
+  // ช่างเริ่มซ่อมไปก่อนด้วยของที่มีระหว่างรอของมาส่ง กับยังเริ่มไม่ได้เลยเพราะรอของ
+  // สิ่งที่ระบบต้องทำคือ "แยกสองแบบนี้ให้ออก" ไม่ใช่ไปห้ามแบบใดแบบหนึ่ง
+  const waitingLabel = opinionWaitingLabel(o);
+  const waitingNote = waitingLabel
+    ? `<p class="desc" style="margin:0 0 10px; color:#c17f1e;">⏳ ${escapeHtml(waitingLabel)} — ยังเริ่ม/ทำต่อด้วยอุปกรณ์ที่มีอยู่ก่อนได้ ระบบไม่ได้ล็อกปุ่มไว้</p>`
+    : '';
 
   // action box depending on role + status
   let actionBox = '';
@@ -2870,12 +2915,14 @@ function renderDetail(){
     actionBox = `
     <div class="action-box">
       <h4>งานถูกมอบหมายแล้ว — รอเริ่มดำเนินการ</h4>
+      ${waitingNote}
       <div class="order-actions"><button class="btn btn-primary" onclick="startRepair('${o.id}')">▶ เริ่มดำเนินการซ่อม</button></div>
     </div>`;
   } else if(hasRole('tech') && o.status==='IN_PROGRESS' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
     actionBox = `
     <div class="action-box">
       <h4>กำลังซ่อม</h4>
+      ${waitingNote}
       <div class="order-actions"><button class="btn btn-success" onclick="finishRepair('${o.id}')">✓ ซ่อมเสร็จสิ้น</button></div>
     </div>`;
   }
@@ -3014,7 +3061,10 @@ function renderDetail(){
       <span class="doc-chip">${o.docNumber}</span>
       <h2 class="view-title" style="display:inline-block; margin-left:10px;">แผนก ${o.department}</h2>
     </div>
-    <span class="status-pill" style="color:${meta.color}; background:${meta.bg}; font-size:13px; padding:6px 14px;">${meta.label}</span>
+    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+      ${waitingLabel ? `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd; font-size:13px; padding:6px 14px;">⏳ ${escapeHtml(waitingLabel)}</span>` : ''}
+      <span class="status-pill" style="color:${meta.color}; background:${meta.bg}; font-size:13px; padding:6px 14px;">${meta.label}</span>
+    </div>
   </div>
   <div class="card">
     <div class="grid-2">
