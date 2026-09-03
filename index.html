@@ -478,7 +478,7 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+  ui: { actionFor:null, actionType:null, actionNote:'', actionBusy:false, resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
@@ -502,7 +502,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.5';
+const APP_VERSION = '2026-09-03.6';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1986,6 +1986,14 @@ function backToList(){
 }
 function getOrder(id){ return state.orders.find(o => o.id === id); }
 
+/* true ระหว่างที่กำลังเขียนข้อมูลกลับเซิร์ฟเวอร์ — รอบ poll จะไม่สลับ state.orders เป็นชุดใหม่ตอนนั้น
+   (ถ้าสลับกลางคัน ออบเจ็กต์ใบที่เพิ่งแก้จะกลายเป็นของ "ชุดเก่า" ที่ไม่ได้อยู่ใน state.orders แล้ว
+    persistOrders() จึงเขียนชุดใหม่ที่ไม่มีการแก้ขึ้นไปทับ = กดส่งสำเร็จแต่ข้อมูลไม่เข้าระบบ) */
+let writeInFlight = false;
+/* รูปที่อัปโหลดขึ้นเซิร์ฟเวอร์สำเร็จแล้วแต่ยังเขียนสถานะใบไม่สำเร็จ — เก็บไว้กันอัปโหลดซ้ำตอนผู้ใช้กดส่งใหม่
+   ไม่งั้นรูปชุดเดิมจะถูกต่อท้ายซ้ำอีกรอบทุกครั้งที่กด */
+let resubmitUpload = null;
+
 // เผื่อ state.orders ยังเป็นแค่ใบเดียวที่ขอมาแบบด่วนตอนเปิดจากลิงก์แจ้งเตือน (ยังไม่ใช่รายการเต็ม) —
 // ห้ามเขียนทับ "orders" บนเซิร์ฟเวอร์ด้วยรายการที่ไม่ครบ ไม่งั้นใบอื่นๆ ที่ยังไม่ถูกโหลดมาจะหายไปหมด
 async function persistOrders(){
@@ -1994,11 +2002,15 @@ async function persistOrders(){
 }
 
 function openActionBox(id, type){
+  if(state.ui.actionBusy) return;   // กำลังส่งอยู่ ห้ามรีเซ็ตกล่องทิ้งกลางคัน
   state.ui.actionFor = id; state.ui.actionType = type; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  resubmitUpload = null;
   render();
 }
 function closeActionBox(){
+  if(state.ui.actionBusy) return;
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  resubmitUpload = null;
   render();
 }
 
@@ -2065,10 +2077,15 @@ function removeResubmitPhoto(idx){
 // อิงจากสถานะใบแจ้งซ่อม (ไม่ใช่ state.role ตรงๆ) เพื่อให้ admin ซึ่งผ่าน hasRole() ได้ทุกบทบาท
 // พร้อมกัน ยังคงรันฟังก์ชันที่ถูกต้องตรงกับกล่องการทำงานที่กำลังเปิดอยู่จริง
 function confirmAction(id){
+  if(state.ui.actionBusy) return;   // กันกดซ้ำระหว่างที่รอบก่อนยังส่งไม่เสร็จ
   const o = getOrder(id); if(!o) return;
   const type = state.ui.actionType;
   const note = state.ui.actionNote.trim();
-  if(type !== 'approve' && type !== 'verify_pass' && !note){ toast('กรุณาระบุหมายเหตุ', true); return; }
+  // ส่งข้อมูลเพิ่มเติม: แนบเฉพาะรูปโดยไม่พิมพ์ข้อความก็ถือว่าเป็นข้อมูลแล้ว ไม่ต้องบังคับให้พิมพ์
+  const hasResubmitPhotos = type === 'resubmit' && (state.ui.resubmitPhotos || []).length > 0;
+  if(type !== 'approve' && type !== 'verify_pass' && !note && !hasResubmitPhotos){
+    toast(type === 'resubmit' ? 'กรุณาพิมพ์ข้อมูลเพิ่มเติม หรือแนบรูปอย่างน้อย 1 รูป' : 'กรุณาระบุหมายเหตุ', true); return;
+  }
   if(o.status === 'PENDING_FM'){
     if(type==='approve') approveFm(id, note);
     else if(type==='reject') rejectFm(id, note);
@@ -2150,24 +2167,58 @@ async function needInfoGm(id, note){
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
 }
+/* เดิมฟังก์ชันนี้แจ้ง "ส่งข้อมูลเพิ่มเติมแล้ว" ทุกครั้งโดยไม่เคยดูผลของ storeSet/persistOrders เลย
+   เน็ตหลุดหรือเซิร์ฟเวอร์ตอบไม่ผ่านเมื่อไหร่ ผู้ใช้ก็เห็นข้อความสำเร็จทั้งที่ข้อมูลไม่ได้เข้าระบบ
+   แล้วข้อความ+รูปที่พิมพ์ไว้ก็ถูกล้างทิ้งไปพร้อมกับกล่อง — ตอนนี้เขียนสำเร็จจริงเท่านั้นถึงจะปิดกล่อง */
 async function resubmitInfo(id, note){
   const o = getOrder(id); if(!o) return;
   const msg = (note||'').trim();
-  const newPhotos = state.ui.resubmitPhotos || [];
+  const photosRef = state.ui.resubmitPhotos || [];
+  const newPhotos = photosRef.slice();
+  if(!msg && !newPhotos.length){ toast('กรุณาพิมพ์ข้อมูลเพิ่มเติม หรือแนบรูปอย่างน้อย 1 รูป', true); return; }
+  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
   const backTo = o.status === 'NEEDS_INFO_FM' ? 'PENDING_FM' : 'PENDING_GM';
-  o.status = backTo;
-  o.statusHistory.push({ status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + msg + (newPhotos.length ? ` (แนบรูปเพิ่ม ${newPhotos.length} รูป)` : '') });
-  if(newPhotos.length){
-    const existing = (await storeGet('photos:'+id)) || [];
-    const merged = existing.concat(newPhotos);
-    await storeSet('photos:'+id, merged);
-    o.photoCount = merged.length;
-    if(state.selectedOrderId === id) state.detailPhotos = merged;
+
+  state.ui.actionBusy = true; writeInFlight = true; render();
+  try{
+    // อัปโหลดรูปให้เสร็จก่อนเปลี่ยนสถานะใบ — รูปไม่ขึ้นก็ต้องคงสถานะเดิมไว้ให้กดส่งใหม่ได้ทั้งชุด
+    let merged = null;
+    if(newPhotos.length){
+      if(resubmitUpload && resubmitUpload.id === id && resubmitUpload.photosRef === photosRef){
+        merged = resubmitUpload.merged;   // รอบก่อนอัปโหลดรูปชุดนี้ขึ้นไปแล้ว ไม่ต้องส่งซ้ำให้รูปเบิ้ล
+      }else{
+        const existing = (await storeGet('photos:'+id)) || [];
+        merged = existing.concat(newPhotos);
+        if(!(await storeSet('photos:'+id, merged))){
+          toast('อัปโหลดรูปไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) ยังไม่ได้ส่งข้อมูล กรุณาลองใหม่อีกครั้ง', true);
+          return;
+        }
+        resubmitUpload = { id, photosRef, merged };
+      }
+    }
+    // หยิบใบจาก state ล่าสุดอีกครั้งก่อนแก้ เผื่อมีรอบ poll สลับ state.orders เป็นชุดใหม่ระหว่างรออัปโหลดรูป
+    const cur = getOrder(id) || o;
+    const prevStatus = cur.status;
+    const prevPhotoCount = cur.photoCount;
+    cur.status = backTo;
+    const photoNote = newPhotos.length ? `แนบรูปเพิ่ม ${newPhotos.length} รูป` : '';
+    cur.statusHistory.push({ status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + (msg ? msg + (photoNote ? ` (${photoNote})` : '') : photoNote) });
+    if(merged) cur.photoCount = merged.length;
+
+    if(!(await persistOrders())){
+      cur.status = prevStatus; cur.photoCount = prevPhotoCount; cur.statusHistory.pop();
+      toast('ส่งข้อมูลไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) ข้อความและรูปยังอยู่ครบ กรุณากด "ส่งข้อมูล" อีกครั้ง', true);
+      return;
+    }
+    if(merged && state.selectedOrderId === id) state.detailPhotos = merged;
+    resubmitUpload = null;
+    await pushNotification(backTo==='PENDING_FM' ? 'fm' : 'gm', id, o.docNumber, `ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมแผนก ${o.department} แล้ว กรุณาตรวจสอบอีกครั้ง`);
+    toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
+    state.ui.actionBusy = false;
+    closeActionBox();
+  }finally{
+    state.ui.actionBusy = false; writeInFlight = false; render();
   }
-  await persistOrders();
-  await pushNotification(backTo==='PENDING_FM' ? 'fm' : 'gm', id, o.docNumber, `ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมแผนก ${o.department} แล้ว กรุณาตรวจสอบอีกครั้ง`);
-  toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
-  closeActionBox();
 }
 function addAssignTechRow(){ state.ui.assignTechs.push(''); render(); }
 function removeAssignTechRow(i){ state.ui.assignTechs.splice(i,1); render(); }
@@ -2636,8 +2687,8 @@ function renderDetail(){
         <textarea class="input" data-fid="actionNote" oninput="state.ui.actionNote=this.value" placeholder="ระบุหมายเหตุ...">${escapeHtml(state.ui.actionNote)}</textarea>
         ${photoSection}
         <div class="order-actions">
-          <button class="btn ${(actionType==='reject'||actionType==='verify_fail')?'btn-danger-outline':'btn-primary'} btn-sm" onclick="confirmAction('${o.id}')">${CONFIRM_LABELS[actionType]}</button>
-          <button class="btn btn-outline btn-sm" onclick="closeActionBox();">ยกเลิก</button>
+          <button class="btn ${(actionType==='reject'||actionType==='verify_fail')?'btn-danger-outline':'btn-primary'} btn-sm" onclick="confirmAction('${o.id}')" ${state.ui.actionBusy?'disabled':''}>${state.ui.actionBusy ? '⏳ กำลังส่ง...' : CONFIRM_LABELS[actionType]}</button>
+          <button class="btn btn-outline btn-sm" onclick="closeActionBox();" ${state.ui.actionBusy?'disabled':''}>ยกเลิก</button>
         </div>
       </div>`;
   }
@@ -2669,12 +2720,17 @@ function renderDetail(){
       ${noteBox()}
     </div>`;
   } else if(hasRole('requester') && (o.status==='NEEDS_INFO_FM' || o.status==='NEEDS_INFO_GM')){
+    /* กล่องนี้มีปุ่ม "ส่ง" ได้ปุ่มเดียวเสมอ: ยังไม่เปิดกล่องกรอก = เห็นแค่ปุ่มเปิด, เปิดแล้ว = เห็นแค่ปุ่ม "ส่งข้อมูล"
+       เดิมโชว์ทั้งสองปุ่มพร้อมกัน ผู้ใช้จึงสับสนว่าต้องกดปุ่มไหน และปุ่มบน (openActionBox) ล้างข้อความกับ
+       รูปที่กรอกไว้ทิ้งทุกครั้งที่กด — กดแล้วหน้าจอเหมือนไม่มีอะไรเกิดขึ้นและข้อมูลไม่เข้าระบบ */
+    const resubmitOpen = actionBoxOpen && actionType === 'resubmit';
     actionBox = `
     <div class="action-box">
       <h4>ต้องการข้อมูลเพิ่มเติมจากท่าน</h4>
+      ${resubmitOpen ? '' : `
       <div class="order-actions">
         <button class="btn btn-primary" onclick="openActionBox('${o.id}','resubmit')">📨 ส่งข้อมูลเพิ่มเติม</button>
-      </div>
+      </div>`}
       ${noteBox()}
     </div>`;
   } else if(hasRole('requester') && o.status==='PENDING_VERIFY'){
@@ -3503,6 +3559,10 @@ function startPolling(){
 }
 async function pollForUpdates(){
   if(pollInFlight) return;
+  // ระหว่างกำลังเขียนข้อมูลกลับเซิร์ฟเวอร์ หรือมีกล่องกรอก (อนุมัติ/ขอข้อมูล/ส่งข้อมูลเพิ่มเติม) เปิดค้างอยู่
+  // ห้ามสลับ state.orders และห้าม render() ทับ — เพราะ render() วาด DOM ใหม่ทั้งหน้า ถ้ามาโดนจังหวะที่ผู้ใช้
+  // กำลังแตะปุ่ม ปุ่มตัวเดิมจะถูกลบทิ้งก่อน click จะเกิด กลายเป็น "กดปุ่มส่งแล้วไม่มีอะไรเกิดขึ้น" บนมือถือ
+  if(writeInFlight || state.ui.actionFor) return;
   pollInFlight = true;
   try{
     // lineUsers/lineUserRoles/lineRecipients ใช้แค่หน้าตั้งค่าของ admin — โหลด/poll แค่ตอนเคยเข้าหน้านั้น
