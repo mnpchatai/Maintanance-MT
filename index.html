@@ -510,7 +510,7 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordMode:'full', maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
@@ -534,7 +534,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-04.2';
+const APP_VERSION = '2026-09-04.3';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -2324,31 +2324,21 @@ async function assignTechnician(id){
 }
 
 /* ============================= MAINTENANCE RECORD (ผจก.แผนกซ่อมบำรุง / ช่างผู้รับผิดชอบ) ============================= */
-/* กล่องนี้มีสองโหมด (state.ui.maintRecordMode)
-   'full'  = ผจก.แผนกซ่อมบำรุง (รวม admin) — แก้ได้ทั้งวิเคราะห์สาเหตุ / ความคิดเห็น / ตารางอะไหล่
-   'parts' = ช่างที่ถูกมอบหมายใบนี้ — แก้ได้เฉพาะ "รายการอะไหล่/วัสดุที่ใช้"
-   คนที่รู้จริงว่างานนี้ใช้ของอะไรไปกี่ชิ้น ราคาเท่าไหร่ ซื้อจากร้านไหน คือช่างที่ลงมือซ่อม
-   ไม่ใช่คนเซ็นใบ เดิมช่างต้องเขียนใส่กระดาษมาให้ ผจก.แผนกซ่อมบำรุงพิมพ์ลงระบบให้อีกต่อ
-   ส่วนวิเคราะห์สาเหตุ/ความคิดเห็นของช่างผู้ตรวจสอบยังเป็นดุลพินิจของ ผจก.แผนกซ่อมบำรุงเท่านั้น
-   (เปลี่ยนความคิดเห็น = ล้างหมุดความคืบหน้าทั้งชุด ช่างไม่ควรไปแตะ) */
+/* "บันทึกข้อมูลซ่อมบำรุง" ทั้งกล่อง — วิเคราะห์สาเหตุ / ความคิดเห็นของช่างผู้ตรวจสอบ /
+   รายการอะไหล่-วัสดุ — แก้ได้ทั้ง ผจก.แผนกซ่อมบำรุง (รวม admin) และช่างที่ถูกมอบหมายใบนี้
+   คนที่รู้จริงว่าเครื่องเสียเพราะอะไร ควรซ่อมเองหรือส่งซ่อม และใช้ของอะไรไปกี่ชิ้น คือช่าง
+   ที่ลงมือซ่อม ไม่ใช่คนเซ็นใบ เดิมช่างต้องเขียนใส่กระดาษมาให้ ผจก.แผนกซ่อมบำรุงพิมพ์ลงระบบ
+   ให้อีกต่อ ข้อมูลจึงมาช้าและตกหล่นระหว่างทาง
+   ทุกครั้งที่บันทึกจะเก็บชื่อคนแก้ไว้ที่ maintRecord.updatedBy/updatedAt และเขียนลง
+   statusHistory ว่าแก้ช่องไหนไปบ้าง — เปิดให้แก้ได้กว้างขึ้นต้องมาคู่กับร่องรอยที่ตามได้ */
 function openMaintRecord(id){
   const o = getOrder(id); if(!o) return;
+  if(!canEditMaintRecord(o)){ toast('ท่านไม่มีสิทธิ์แก้ไขบันทึกข้อมูลซ่อมบำรุงของใบนี้', true); return; }
   const mr = o.maintRecord;
   state.ui.maintRecordFor = id;
-  state.ui.maintRecordMode = 'full';
   state.ui.maintRecordCause = (mr && mr.causeAnalysis) || '';
   state.ui.maintRecordOpinion = (mr && mr.inspectorOpinion) || '';
   state.ui.maintRecordParts = loadPartRows(mr);
-  render();
-}
-/* ช่างเปิดเฉพาะตารางอะไหล่ — ไม่โหลดสองช่องของ ผจก.แผนกซ่อมบำรุงขึ้นมาให้แก้ */
-function openMaintParts(id){
-  const o = getOrder(id); if(!o) return;
-  if(!canEditMaintParts(o)){ toast('ท่านไม่มีสิทธิ์แก้ไขรายการอะไหล่/วัสดุของใบนี้', true); return; }
-  state.ui.maintRecordFor = id;
-  state.ui.maintRecordMode = 'parts';
-  state.ui.maintRecordCause = ''; state.ui.maintRecordOpinion = '';
-  state.ui.maintRecordParts = loadPartRows(o.maintRecord);
   render();
 }
 /* เติมฟิลด์ที่ขาดให้ครบก่อนเอามาแก้ — ข้อมูลเก่าที่เคยเขียนไว้ไม่ครบทุกคอลัมน์
@@ -2359,8 +2349,7 @@ function loadPartRows(mr){
     : [emptyPartRow()];
 }
 function closeMaintRecord(){
-  state.ui.maintRecordFor = null; state.ui.maintRecordMode = 'full';
-  state.ui.maintRecordCause=''; state.ui.maintRecordOpinion='';
+  state.ui.maintRecordFor = null; state.ui.maintRecordCause=''; state.ui.maintRecordOpinion='';
   state.ui.maintRecordParts = [emptyPartRow()];
   render();
 }
@@ -2373,56 +2362,63 @@ function collectPartRows(rows){
     .map(p => { const r = {}; PART_FIELDS.forEach(f => r[f] = String(p[f] == null ? '' : p[f]).trim()); return r; })
     .filter(p => p.name);
 }
-/* เทียบรายการอะไหล่สองชุด — ใช้ตัดสินว่ากดบันทึกแล้ว "เปลี่ยนจริงไหม"
-   จะได้ไม่มีบรรทัดขยะใน "ลำดับเหตุการณ์" และไม่ยิงแจ้งเตือนซ้ำทุกครั้งที่กดบันทึก */
+/* เทียบรายการอะไหล่สองชุด — ใช้ตัดสินว่ากดบันทึกแล้ว "เปลี่ยนจริงไหม" */
 function samePartsList(a, b){
   const A = a || [], B = b || [];
   if(A.length !== B.length) return false;
   const val = (row, f) => String(row[f] == null ? '' : row[f]);
   return A.every((p, i) => PART_FIELDS.every(f => val(p, f) === val(B[i], f)));
 }
-/* ใครแก้ "รายการอะไหล่/วัสดุที่ใช้" ได้: ผจก.แผนกซ่อมบำรุง (รวม admin ผ่าน hasRole)
-   และช่างที่ถูกมอบหมายใบนี้ — เงื่อนไขเดียวกับ canUpdateOpinionProgress ด้วยเหตุผล
-   เดียวกัน คือสองกลุ่มนี้เท่านั้นที่อยู่หน้างานจริง ผู้แจ้ง/ผู้อนุมัติดูได้อย่างเดียว
-   ไม่ล็อคตามสถานะใบ: ของที่ลืมลงมักมารู้หลังจากกดซ่อมเสร็จไปแล้ว และ ผจก.แผนกซ่อมบำรุง
-   เองก็แก้ได้ทุกเมื่ออยู่แล้ว ทุกการแก้ถูกบันทึกใน statusHistory จึงตามรอยได้ว่าใครแก้อะไรเมื่อไหร่ */
-function canEditMaintParts(o){
+/* ใครแก้บันทึกข้อมูลซ่อมบำรุงได้: ผจก.แผนกซ่อมบำรุง (รวม admin ผ่าน hasRole) และช่างที่ถูก
+   มอบหมายใบนี้ — เงื่อนไขเดียวกับ canUpdateOpinionProgress ด้วยเหตุผลเดียวกัน คือสองกลุ่มนี้
+   เท่านั้นที่อยู่หน้างานจริง ผู้แจ้ง/ผู้อนุมัติดูได้อย่างเดียว
+   ไม่ล็อคตามสถานะใบ: ของที่ลืมลงมักรู้ตัวหลังกดซ่อมเสร็จไปแล้ว และ ผจก.แผนกซ่อมบำรุงเอง
+   ก็แก้ได้ทุกเมื่ออยู่แล้วตั้งแต่ต้น */
+function canEditMaintRecord(o){
   if(hasRole('maint')) return true;
   return state.role === 'tech' && assignedTechs(o).includes(state.myTechName);
 }
-/* ชื่อที่จะบันทึกไว้ว่า "ใครแก้" — ช่างใช้ชื่อช่างของตัวเอง ไม่ใช่ชื่อบทบาท */
-function maintPartsEditorName(){
+/* ชื่อที่จะบันทึกไว้ว่า "ใครแก้" — ช่างใช้ชื่อช่างของตัวเอง ไม่ใช่ชื่อบทบาท
+   (เดิม updatedBy ฝัง ROLES.maint.label ตายตัว ซึ่งตอนนี้จะโกหกทุกครั้งที่ช่างเป็นคนแก้) */
+function maintRecordEditorName(){
   return state.myTechName || state.myName || (ROLES[state.role] ? ROLES[state.role].label : '');
 }
-function partsCountLabel(parts){
-  return parts.length ? parts.length + ' รายการ' : 'ไม่มีรายการ';
+/* สรุปว่าการกดบันทึกครั้งนี้เปลี่ยนอะไรไปบ้าง — ใช้ทั้งใน "ลำดับเหตุการณ์" และในข้อความแจ้งเตือน
+   คนอ่านจะได้รู้ทันทีว่าต้องกลับไปดูช่องไหน ไม่ใช่แค่ "มีคนแก้บันทึก" ลอยๆ
+   ว่างเปล่า = ไม่มีอะไรเปลี่ยน จึงไม่ต้องเขียนอะไรลงระบบเลย */
+function maintRecordChanges(prev, next){
+  const before = prev || {}, chg = [];
+  if((before.causeAnalysis || '') !== next.causeAnalysis) chg.push('วิเคราะห์สาเหตุ');
+  if((before.inspectorOpinion || '') !== next.inspectorOpinion) chg.push('ความคิดเห็นของช่างผู้ตรวจสอบ');
+  if(!samePartsList(before.parts || [], next.parts)) chg.push('รายการอะไหล่/วัสดุ');
+  return chg;
 }
 async function saveMaintRecord(id){
   const o = getOrder(id); if(!o) return;
   if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
-  if(!hasRole('maint')){ toast('เฉพาะผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่บันทึกข้อมูลชุดนี้ได้', true); return; }
+  if(!canEditMaintRecord(o)){ toast('ท่านไม่มีสิทธิ์แก้ไขบันทึกข้อมูลซ่อมบำรุงของใบนี้', true); return; }
   const cause = state.ui.maintRecordCause.trim();
   const opinion = state.ui.maintRecordOpinion;
   if(!cause){ toast('กรุณาระบุผลการวิเคราะห์สาเหตุ/อาการที่ชำรุด', true); return; }
   if(!opinion){ toast('กรุณาเลือกความคิดเห็นของช่างผู้ตรวจสอบ', true); return; }
-  const parts = collectPartRows(state.ui.maintRecordParts);
+  const next = { causeAnalysis: cause, inspectorOpinion: opinion, parts: collectPartRows(state.ui.maintRecordParts) };
   const prevRecord = o.maintRecord, prevProgress = o.opinionProgress;
+  const changes = maintRecordChanges(prevRecord, next);
+  if(!changes.length){ toast('ไม่มีการเปลี่ยนแปลงของบันทึกข้อมูลซ่อมบำรุง'); closeMaintRecord(); return; }
+  const by = maintRecordEditorName();
   const histLen = o.statusHistory.length;
-  const partsChanged = !samePartsList((prevRecord && prevRecord.parts) || [], parts);
   const prevOpinion = progressTrackOf(o), prevLabel = progressTrackLabel(o);
-  o.maintRecord = { causeAnalysis: cause, inspectorOpinion: opinion, parts, updatedBy: ROLES.maint.label, updatedAt: nowIso(),
-    // ป้าย "ใครแก้ตารางอะไหล่ล่าสุด" ต้องอยู่รอดข้ามการกดบันทึกของ ผจก.แผนกซ่อมบำรุง
-    // ที่ไม่ได้แก้ตารางเลย ไม่งั้นเครดิตของช่างจะหายไปเงียบๆ ทุกครั้งที่ ผจก. กดบันทึก
-    partsUpdatedBy: partsChanged ? ROLES.maint.label : ((prevRecord && prevRecord.partsUpdatedBy) || ''),
-    partsUpdatedAt: partsChanged ? nowIso() : ((prevRecord && prevRecord.partsUpdatedAt) || '') };
+  o.maintRecord = { ...next, updatedBy: by, updatedAt: nowIso() };
   // เปลี่ยนแนวทางแล้ว หมุดความคืบหน้าของแนวทางเดิมใช้ต่อไม่ได้ (คนละชุดขั้นตอน) — ล้างทิ้ง
   // แล้วบันทึกไว้ใน "ลำดับเหตุการณ์" ว่าเปลี่ยนจากอะไรเป็นอะไร ประวัติหมุดเดิมยังอ่านย้อนได้จากที่นั่น
+  // (ตอนนี้ช่างเปลี่ยนความคิดเห็นได้ด้วย ผลข้อนี้จึงถูกเตือนไว้ใต้ดรอปดาวน์ในฟอร์มแล้ว)
   if(prevOpinion && prevOpinion !== opinion && o.opinionProgress){
     o.opinionProgress = null;
     o.statusHistory.push({ status:o.status, at: nowIso(),
       note:'เปลี่ยนแนวทางจาก "' + prevLabel + '" เป็น "' + INSPECTOR_OPINION_META[opinion] + '" — ล้างความคืบหน้าเดิมของแนวทางก่อนหน้า' });
   }
-  o.statusHistory.push({ status:o.status, at: nowIso(), note:'ผู้จัดการแผนกซ่อมบำรุงบันทึกข้อมูลซ่อมบำรุง (วิเคราะห์สาเหตุ/รายการอะไหล่)' });
+  o.statusHistory.push({ status:o.status, at: nowIso(),
+    note: (by ? by + ' ' : '') + 'บันทึกข้อมูลซ่อมบำรุง — แก้ไข: ' + changes.join(', ') });
   const ok = await persistOrders();
   if(!ok){
     // เขียนกลับไม่สำเร็จ = ยังไม่มีอะไรถูกบันทึกจริง ต้องคืนค่าในหน้าจอให้ตรงกับของบนเซิร์ฟเวอร์
@@ -2433,43 +2429,14 @@ async function saveMaintRecord(id){
     render();
     return;
   }
-  toast('บันทึกข้อมูลซ่อมบำรุงเรียบร้อย');
-  closeMaintRecord();
-}
-/* ช่างบันทึกเฉพาะตารางอะไหล่ — ห้ามแตะ causeAnalysis/inspectorOpinion และห้ามล้าง opinionProgress
-   ใบที่ ผจก.แผนกซ่อมบำรุงยังไม่ได้บันทึกอะไรเลย ช่างเริ่มลงรายการอะไหล่ก่อนได้ — สร้าง record
-   ที่สองช่องนั้นว่างไว้ ซึ่ง progressTrackOf() ไม่สนใจ (inspectorOpinion ว่างไม่เข้าเงื่อนไข
-   OPINION_STEPS) หมุดความคืบหน้าจึงยังตกไปใช้ "การดำเนินงาน" ตอนมอบหมายเหมือนเดิม */
-async function saveMaintParts(id){
-  const o = getOrder(id); if(!o) return;
-  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
-  if(!canEditMaintParts(o)){ toast('ท่านไม่มีสิทธิ์แก้ไขรายการอะไหล่/วัสดุของใบนี้', true); return; }
-  const parts = collectPartRows(state.ui.maintRecordParts);
-  const prevRecord = o.maintRecord;
-  const prevParts = (prevRecord && prevRecord.parts) || [];
-  if(samePartsList(prevParts, parts)){ toast('ไม่มีการเปลี่ยนแปลงของรายการอะไหล่/วัสดุ'); closeMaintRecord(); return; }
-  const by = maintPartsEditorName();
-  const histLen = o.statusHistory.length;
-  o.maintRecord = { causeAnalysis:'', inspectorOpinion:'', ...(prevRecord || {}),
-    parts, partsUpdatedBy: by, partsUpdatedAt: nowIso() };
-  o.statusHistory.push({ status:o.status, at: nowIso(),
-    note: (by ? by + ' ' : '') + 'แก้ไขรายการอะไหล่/วัสดุที่ใช้ (' + partsCountLabel(parts) + ')' });
-  const ok = await persistOrders();
-  if(!ok){
-    o.maintRecord = prevRecord;
-    o.statusHistory.length = histLen;
-    toast('บันทึกรายการอะไหล่/วัสดุไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่', true);
-    render();
-    return;
-  }
-  // ผจก.แผนกซ่อมบำรุงเป็นเจ้าของเอกสารและเป็นคนตั้งเบิก/สั่งซื้อ จึงต้องรู้ทุกครั้งที่ตารางอะไหล่เปลี่ยน
+  // ผจก.แผนกซ่อมบำรุงเป็นเจ้าของเอกสารและเป็นคนตั้งเบิก/สั่งซื้อ จึงต้องรู้ทุกครั้งที่ช่างแก้บันทึกนี้
   // ผู้แจ้งซ่อมไม่ต้องรู้ (ไม่ใช่ข้อมูลที่เขาต้องทำอะไรต่อ) จึงไม่ยิงหาผู้แจ้ง
   // ถ้าคนที่แก้คือ ผจก.แผนกซ่อมบำรุง/admin เอง ก็ไม่ต้องแจ้งตัวเอง
   if(!hasRole('maint')){
     await pushNotification('maint', o.id, o.docNumber,
-      (by || 'ช่าง') + ' แก้ไขรายการอะไหล่/วัสดุที่ใช้ของใบนี้ (' + partsCountLabel(parts) + ')');
+      (by || 'ช่าง') + ' แก้ไขบันทึกข้อมูลซ่อมบำรุงของใบนี้ — ' + changes.join(', '));
   }
-  toast('บันทึกรายการอะไหล่/วัสดุเรียบร้อย');
+  toast('บันทึกข้อมูลซ่อมบำรุงเรียบร้อย');
   closeMaintRecord();
 }
 
@@ -3153,59 +3120,33 @@ function renderDetail(){
     </div>`;
   }
 
-  // "บันทึกข้อมูลซ่อมบำรุง" — เอกสารประกอบตามใบมอบหมายงาน/ใบวิเคราะห์สาเหตุของ ผจก.แผนกซ่อมบำรุง
+  // "บันทึกข้อมูลซ่อมบำรุง" — เอกสารประกอบตามใบมอบหมายงาน/ใบวิเคราะห์สาเหตุ
   // แสดงให้ทุกบทบาทเห็นแบบอ่านอย่างเดียวหลังมอบหมายงานแล้ว
-  // แก้ไขได้สองระดับ: ผจก.แผนกซ่อมบำรุง (+admin) แก้ได้ทั้งกล่อง ส่วนช่างที่ถูกมอบหมายใบนี้
-  // แก้ได้เฉพาะตาราง "รายการอะไหล่/วัสดุที่ใช้" (ดู canEditMaintParts / saveMaintParts)
+  // แก้ไขได้ทั้งกล่อง (สาเหตุ / ความคิดเห็น / อะไหล่) เฉพาะ ผจก.แผนกซ่อมบำรุง (+admin)
+  // และช่างที่ถูกมอบหมายใบนี้ — ดู canEditMaintRecord()
   let maintRecordSection = '';
   if(assignedTechs(o).length){
     const mr = o.maintRecord;
     const editingRecord = state.ui.maintRecordFor === o.id;
-    const partsOnly = editingRecord && state.ui.maintRecordMode === 'parts';
-    const canEditParts = state.ordersLoaded && canEditMaintParts(o);
-    const noneYet = '<span style="color:var(--slate);">ยังไม่ได้บันทึก (ผจก.แผนกซ่อมบำรุง)</span>';
-    // ตารางอะไหล่แบบแก้ไขได้ — ใช้ร่วมกันทั้งฟอร์มเต็มของ ผจก.แผนกซ่อมบำรุงและฟอร์มเฉพาะอะไหล่ของช่าง
-    // จะได้ไม่มีทางที่สองที่นี้มีคอลัมน์/ปุ่มไม่ตรงกัน
-    const partsEditor = !editingRecord ? '' : `
-        <div class="field" style="margin-bottom:8px;">
-          <label class="field-label">รายการอะไหล่ / วัสดุที่ใช้ (เฉพาะเครื่องจักรมีรหัส)</label>
-          <div style="overflow-x:auto;">
-            <table class="mini">
-              <tr><th>ลำดับ</th><th>รายการ</th><th>จำนวน</th><th>หน่วย</th><th>ราคา</th><th>ชื่อร้าน</th><th>หมายเหตุ</th><th></th></tr>
-              ${state.ui.maintRecordParts.map((p,i) => `
-              <tr>
-                <td>${i+1}</td>
-                <td><input class="input" style="min-width:130px;" value="${escapeHtml(p.name)}" oninput="setMaintPart(${i},'name',this.value)" placeholder="รายการอะไหล่/วัสดุที่ใช้"></td>
-                <td><input class="input" style="width:64px;" value="${escapeHtml(p.qty)}" oninput="setMaintPart(${i},'qty',this.value)"></td>
-                <td><input class="input" style="width:64px;" value="${escapeHtml(p.unit)}" oninput="setMaintPart(${i},'unit',this.value)"></td>
-                <td><input class="input" style="width:84px;" value="${escapeHtml(p.price)}" oninput="setMaintPart(${i},'price',this.value)"></td>
-                <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.shop)}" oninput="setMaintPart(${i},'shop',this.value)"></td>
-                <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.note)}" oninput="setMaintPart(${i},'note',this.value)"></td>
-                <td>${state.ui.maintRecordParts.length>1 ? `<button class="del" onclick="removeMaintPartRow(${i})">✕</button>` : ''}</td>
-              </tr>`).join('')}
-            </table>
-          </div>
-          <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="addMaintPartRow()">+ เพิ่มรายการ</button>
-        </div>`;
-    if(partsOnly){
-      // ฟอร์มของช่าง — มีแค่ตารางอะไหล่ ไม่มีวิเคราะห์สาเหตุ/ความคิดเห็นให้แก้ (และไม่ถูกเขียนทับด้วย)
+    const canEditRecord = state.ordersLoaded && canEditMaintRecord(o);
+    if(editingRecord){
+      const partRows = state.ui.maintRecordParts.map((p,i) => `
+        <tr>
+          <td>${i+1}</td>
+          <td><input class="input" style="min-width:130px;" value="${escapeHtml(p.name)}" oninput="setMaintPart(${i},'name',this.value)" placeholder="รายการอะไหล่/วัสดุที่ใช้"></td>
+          <td><input class="input" style="width:64px;" value="${escapeHtml(p.qty)}" oninput="setMaintPart(${i},'qty',this.value)"></td>
+          <td><input class="input" style="width:64px;" value="${escapeHtml(p.unit)}" oninput="setMaintPart(${i},'unit',this.value)"></td>
+          <td><input class="input" style="width:84px;" value="${escapeHtml(p.price)}" oninput="setMaintPart(${i},'price',this.value)"></td>
+          <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.shop)}" oninput="setMaintPart(${i},'shop',this.value)"></td>
+          <td><input class="input" style="min-width:100px;" value="${escapeHtml(p.note)}" oninput="setMaintPart(${i},'note',this.value)"></td>
+          <td>${state.ui.maintRecordParts.length>1 ? `<button class="del" onclick="removeMaintPartRow(${i})">✕</button>` : ''}</td>
+        </tr>`).join('');
+      // เตือนเรื่องล้างหมุดไว้ใต้ดรอปดาวน์ — เฉพาะใบที่มีหมุดของแนวทางเดิมบันทึกไว้แล้วจริงๆ
+      // (ไม่มีหมุดก็ไม่มีอะไรให้เสีย ไม่ต้องขู่ผู้ใช้ฟรีๆ)
+      const hasProgress = Object.keys(opinionProgressOf(o)).length > 0;
       maintRecordSection = `
       <div class="action-box">
-        <h4>แก้ไขรายการอะไหล่ / วัสดุที่ใช้ (ช่างผู้รับผิดชอบ)</h4>
-        <p style="margin:0 0 10px; font-size:12.5px; color:var(--slate);">
-          ลงรายการของที่ใช้จริงในงานนี้ได้เลย · ส่วน "วิเคราะห์สาเหตุ" และ "ความคิดเห็นของช่างผู้ตรวจสอบ"
-          ยังเป็นของ ผจก.แผนกซ่อมบำรุง · เมื่อบันทึกแล้วระบบจะแจ้ง ผจก.แผนกซ่อมบำรุงให้ทราบ
-        </p>
-        ${partsEditor}
-        <div class="order-actions">
-          <button class="btn btn-primary" onclick="saveMaintParts('${o.id}')">บันทึกรายการอะไหล่</button>
-          <button class="btn btn-outline" onclick="closeMaintRecord()">ยกเลิก</button>
-        </div>
-      </div>`;
-    } else if(editingRecord){
-      maintRecordSection = `
-      <div class="action-box">
-        <h4>บันทึกข้อมูลซ่อมบำรุง (ผจก.แผนกซ่อมบำรุง)</h4>
+        <h4>บันทึกข้อมูลซ่อมบำรุง</h4>
         <div class="field">
           <label class="field-label">วิเคราะห์สาเหตุ / อาการที่ชำรุด พบว่า <span class="req-star">*</span></label>
           <textarea class="input" oninput="state.ui.maintRecordCause=this.value" placeholder="ระบุผลการวิเคราะห์สาเหตุ...">${escapeHtml(state.ui.maintRecordCause)}</textarea>
@@ -3216,8 +3157,18 @@ function renderDetail(){
             <option value="">-- เลือก --</option>
             ${Object.entries(INSPECTOR_OPINION_META).map(([k,v])=>`<option value="${k}" ${state.ui.maintRecordOpinion===k?'selected':''}>${v}</option>`).join('')}
           </select>
+          ${hasProgress ? `<p style="margin:6px 0 0; font-size:12px; color:var(--slate);">⚠️ เปลี่ยนข้อนี้ = ล้างหมุดความคืบหน้าของแนวทางเดิมทั้งชุด (ยังย้อนดูได้ใน "ลำดับเหตุการณ์")</p>` : ''}
         </div>
-        ${partsEditor}
+        <div class="field" style="margin-bottom:8px;">
+          <label class="field-label">รายการอะไหล่ / วัสดุที่ใช้ (เฉพาะเครื่องจักรมีรหัส)</label>
+          <div style="overflow-x:auto;">
+            <table class="mini">
+              <tr><th>ลำดับ</th><th>รายการ</th><th>จำนวน</th><th>หน่วย</th><th>ราคา</th><th>ชื่อร้าน</th><th>หมายเหตุ</th><th></th></tr>
+              ${partRows}
+            </table>
+          </div>
+          <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="addMaintPartRow()">+ เพิ่มรายการ</button>
+        </div>
         <div class="order-actions">
           <button class="btn btn-primary" onclick="saveMaintRecord('${o.id}')">บันทึก</button>
           <button class="btn btn-outline" onclick="closeMaintRecord()">ยกเลิก</button>
@@ -3228,8 +3179,8 @@ function renderDetail(){
       <div class="action-box">
         <h4>บันทึกข้อมูลซ่อมบำรุง (เอกสารประกอบ)</h4>
         ${mr ? `
-          <div class="kv"><div class="k">วิเคราะห์สาเหตุ / อาการที่ชำรุด</div><div class="v">${mr.causeAnalysis ? escapeHtml(mr.causeAnalysis) : noneYet}</div></div>
-          <div class="kv"><div class="k">ความคิดเห็นของช่างผู้ตรวจสอบ</div><div class="v">${mr.inspectorOpinion ? (INSPECTOR_OPINION_META[mr.inspectorOpinion]||'-') : noneYet}</div></div>
+          <div class="kv"><div class="k">วิเคราะห์สาเหตุ / อาการที่ชำรุด</div><div class="v">${escapeHtml(mr.causeAnalysis)}</div></div>
+          <div class="kv"><div class="k">ความคิดเห็นของช่างผู้ตรวจสอบ</div><div class="v">${INSPECTOR_OPINION_META[mr.inspectorOpinion]||'-'}</div></div>
           ${mr.parts && mr.parts.length ? `
           <div class="kv"><div class="k">รายการอะไหล่ / วัสดุที่ใช้</div>
             <div style="overflow-x:auto;">
@@ -3239,13 +3190,9 @@ function renderDetail(){
               </table>
             </div>
           </div>` : ''}
-          ${mr.partsUpdatedBy ? `<div class="kv"><div class="k">แก้ไขรายการอะไหล่ล่าสุด</div><div class="v">${escapeHtml(mr.partsUpdatedBy)}${mr.partsUpdatedAt ? ' • ' + fmtDateTime(mr.partsUpdatedAt) : ''}</div></div>` : ''}
+          ${mr.updatedBy ? `<div class="kv"><div class="k">แก้ไขล่าสุด</div><div class="v">${escapeHtml(mr.updatedBy)}${mr.updatedAt ? ' • ' + fmtDateTime(mr.updatedAt) : ''}</div></div>` : ''}
         ` : `<p class="desc" style="margin:0 0 10px;">ยังไม่มีการบันทึกข้อมูล</p>`}
-        ${hasRole('maint')
-          ? `<div class="order-actions"><button class="btn btn-outline btn-sm" onclick="openMaintRecord('${o.id}')">${mr?'แก้ไขบันทึก':'📋 บันทึกข้อมูลซ่อมบำรุง'}</button></div>`
-          : (canEditParts
-              ? `<div class="order-actions"><button class="btn btn-outline btn-sm" onclick="openMaintParts('${o.id}')">🔧 ${(mr && mr.parts && mr.parts.length) ? 'แก้ไขรายการอะไหล่/วัสดุ' : 'ลงรายการอะไหล่/วัสดุที่ใช้'}</button></div>`
-              : '')}
+        ${canEditRecord ? `<div class="order-actions"><button class="btn btn-outline btn-sm" onclick="openMaintRecord('${o.id}')">${mr?'แก้ไขบันทึก':'📋 บันทึกข้อมูลซ่อมบำรุง'}</button></div>` : ''}
       </div>`;
     }
   }
