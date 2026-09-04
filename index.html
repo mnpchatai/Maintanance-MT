@@ -531,7 +531,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-03.7';
+const APP_VERSION = '2026-09-04.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1328,6 +1328,10 @@ function lineIdsForPerson({ lineUserId = '', didHash = '', techName = '', name =
   }
   return out;
 }
+/* ช่างคนนี้มีปลายทาง LINE ให้ยิงหรือยัง — ใช้ติดป้ายในดรอปดาวน์ตอนมอบหมายเท่านั้น
+   ผจก.แผนกซ่อมบำรุงจำไม่ได้หรอกว่าใครในแปดคนถูกผูกไว้แล้วบ้าง แค่เห็นป้ายก็รู้เอง
+   ว่าต้องจัดคู่กับใคร — ไม่ต้องมีกฎในโค้ดมาบังคับ */
+function techHasLine(techName){ return lineIdsForPerson({ techName }).length > 0; }
 /* ผู้แจ้งซ่อมของใบนี้คนเดียว ไม่ใช่ทุกคนที่มีบทบาท "ผู้แจ้งซ่อม" */
 function orderRequesterLineIds(o){
   return lineIdsForPerson({ lineUserId: o.requesterLineUserId, didHash: o.requesterDidHash, name: o.requestedBy });
@@ -1457,15 +1461,6 @@ async function sendLineToUserIds(userIds, message, opts){
   const r = await postToRelay({ role:o.fallbackRole, message: named, alsoSheet:true }, (o.label || 'เจาะจงบุคคล') + ' → สำรองตามบทบาท');
   return r;
 }
-/* ปิงช่างที่ได้รับมอบหมายงานใบนั้นเป็นรายคน ไม่ใช่ช่างทุกคนในระบบ
-   หาช่างคนนั้นในข้อมูลแอปไม่เจอ ให้ relay ไปหาแถวที่ "บทบาท" = ชื่อช่าง ในชีตผู้รับแทน
-   (relay รองรับ role เป็นชื่อคนอยู่แล้ว — ยังเป็นการส่งถึงคนเดียว ไม่ใช่ช่างทุกคน) */
-async function sendLineToTech(techName, message){
-  await ensureNotifyRoutingReady();
-  return await sendLineToUserIds(lineIdsForPerson({ techName }), message, {
-    fallbackRole: techName, targetName: techName, label: 'ช่าง ' + techName
-  });
-}
 async function tryLineWebhook(role, message){
   await ensureNotifyRoutingReady();
   const url = lineRelayUrl(role);
@@ -1487,8 +1482,47 @@ function accessRequestsDeepLink(){
 function orderDeepLink(orderId, role){
   return `${APP_URL}?order=${encodeURIComponent(orderId)}&role=${encodeURIComponent(role)}`;
 }
-/* แจ้งเตือน "ทั้งบทบาท" — ใช้กับ fm / gm / maint เท่านั้น (ทุกคนในบทบาทนั้นต้องเห็นงานที่รอตัวเอง) */
-async function pushNotification(toRole, orderId, docNumber, message, target){
+/* ============ การเขียนรายการแจ้งเตือนแบบไม่ทับกันเอง ============
+   คีย์ 'notifications' บนเซิร์ฟเวอร์เป็น "อาร์เรย์ก้อนเดียว" เขียนทีไรก็ทับทั้งก้อน เดิมโค้ดเอา
+   state.notifications ในหน่วยความจำยิงทับตรงๆ จึงเสียแจ้งเตือนได้สองทาง
+     1) สองเครื่องกดพร้อมกัน → คนเขียนทีหลังทับของคนแรกทิ้ง
+     2) pushNotification() ค้างรอ LINE อยู่หลายวินาที ระหว่างนั้น pollForUpdates() (ทุก ~3 วิ)
+        อ่านค่าเก่าจากเซิร์ฟเวอร์มาทับ state.notifications แถวที่เพิ่งเพิ่มจึงหลุดออกจาก
+        หน่วยความจำ แล้วการเขียนครั้งถัดไปก็เอาอาร์เรย์ที่ขาดตัวนั้นไปทับลงชีตถาวร
+   หลักฐานในชีตจริง: ST-WH005/26 มีแถว fm/gm แต่ requester และ maint หายทั้งที่ statusHistory
+   บอกว่าเดินครบทุกขั้น และ GR063/26 หายแถว fm ของตอนสร้างใบ
+   วิธีแก้: อ่านของล่าสุดมาก่อนเขียนเสมอ (แบบเดียวกับ saveAccessRequests) + เก็บแถวที่เครื่องนี้
+   เพิ่งสร้างไว้ใน pendingNotifs จนกว่าจะเห็นมันกลับมาจากเซิร์ฟเวอร์จริงๆ */
+const pendingNotifs = new Map();      // id -> { n, at } การแจ้งเตือนที่ยังไม่ยืนยันว่าลงเซิร์ฟเวอร์แล้ว
+const PENDING_NOTIF_TTL = 10 * 60 * 1000;   // ค้างเกิน 10 นาที = เขียนไม่สำเร็จจริง เลิกยัดกลับ
+/* รวมแถวที่ยังค้างยืนยันของเครื่องนี้เข้ากับรายการที่เพิ่งอ่านมาจากเซิร์ฟเวอร์
+   ตัวไหนเซิร์ฟเวอร์รับไปแล้วให้ถอดออกจากรายการค้าง (ของบนเซิร์ฟเวอร์เป็นตัวจริงเสมอ) */
+function mergePendingNotifs(list){
+  const arr = Array.isArray(list) ? list.slice() : [];
+  if(!pendingNotifs.size) return arr;
+  const have = new Set(arr.map(n => n && n.id));
+  const now = Date.now();
+  pendingNotifs.forEach((p, id) => {
+    if(have.has(id) || (now - p.at) > PENDING_NOTIF_TTL) pendingNotifs.delete(id);
+  });
+  const missing = [...pendingNotifs.values()].map(p => p.n).reverse();   // ใหม่สุดขึ้นก่อน ให้ตรงกับ unshift เดิม
+  return missing.length ? missing.concat(arr) : arr;
+}
+/* เขียนรายการแจ้งเตือนโดยดึงของล่าสุดมาเป็นฐานก่อนเสมอ — คู่กับ saveAccessRequests() */
+async function saveNotifications(mutate){
+  const latest = await storeGet('notifications');
+  const base = mergePendingNotifs(Array.isArray(latest) ? latest : state.notifications);
+  const next = mutate(base);
+  if(!next) return false;
+  const ok = await storeSet('notifications', next);
+  if(ok) state.notifications = next;
+  return ok;
+}
+/* แจ้งเตือน "ทั้งบทบาท" — ใช้กับ fm / gm / maint เท่านั้น (ทุกคนในบทบาทนั้นต้องเห็นงานที่รอตัวเอง)
+   opts.lineText = ข้อความที่จะส่งเข้า LINE ถ้าต้องการรูปแบบอื่นนอกจากค่าเริ่มต้น (ใช้กับช่าง
+   ซึ่งข้อความต้องมีรายละเอียดเครื่องจักร/กำหนดงานมากกว่าที่โชว์บนกระดิ่ง) */
+async function pushNotification(toRole, orderId, docNumber, message, target, opts){
+  const o = opts || {};
   const n = { id: uid(), toRole, orderId, docNumber, message, createdAt: nowIso(), read:false };
   // target = แจ้งเตือนเจาะจงคน: ติดตัวระบุตัวตนไว้กับการแจ้งเตือนด้วย เพื่อให้กระดิ่งในแอป
   // โชว์เฉพาะเจ้าของใบ ไม่ใช่ทุกคนที่มีบทบาทเดียวกัน
@@ -1496,14 +1530,28 @@ async function pushNotification(toRole, orderId, docNumber, message, target){
     n.toDidHash = target.didHash || '';
     n.toName = target.name || '';
   }
-  state.notifications.unshift(n);
-  await storeSet('notifications', state.notifications);
-  const text = `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`;
-  const res = target
-    ? await sendLineToUserIds(target.userIds, text, {
-        fallbackRole: target.fallbackRole || '', targetName: target.name || '', label: `${docNumber} → ${toRole}`
-      })
-    : await tryLineWebhook(toRole, text);
+  pendingNotifs.set(n.id, { n, at: Date.now() });   // เวลาเก็บไว้นอกตัวแจ้งเตือน ไม่ให้ปนลงชีต
+  state.notifications.unshift(n);   // ขึ้นกระดิ่งของคนที่กดปุ่มทันที ไม่ต้องรอเซิร์ฟเวอร์
+  const saved = await saveNotifications(list => {
+    if(!list.some(x => x && x.id === n.id)) list.unshift(n);
+    return list;
+  });
+  if(!saved) toast('บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ — ระบบจะลองใหม่ให้เองในรอบถัดไป', true);
+  const text = o.lineText || `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`;
+  const label = o.label || `${docNumber} → ${toRole}` + (target && target.name ? ` (${target.name})` : '');
+  let res;
+  if(target && o.optionalLine && !(target.userIds || []).length && !target.fallbackRole){
+    // ตั้งใจไม่ยิง (ดู notifyTech) — บันทึกไว้ในบันทึกการส่งว่า "ข้าม" ให้ต่างจาก "ส่งไม่ออก" ชัดเจน
+    logLineSend({ label, skipped:true, ok:true, sent:0, wanted:0,
+      note:(target.name || 'ผู้รับ') + ' ยังไม่ได้ผูก LINE — ไม่ได้ส่ง (คู่งานที่มี LINE ในใบเดียวกันเป็นคนรับแทน)' });
+    res = { ok:true, sent:0 };
+  } else {
+    res = target
+      ? await sendLineToUserIds(target.userIds, text, {
+          fallbackRole: target.fallbackRole || '', targetName: target.name || '', label
+        })
+      : await tryLineWebhook(toRole, text);
+  }
   // ok === false เท่านั้นที่แปลว่า "ไม่ถึงใครเลยแน่ๆ" (null = ส่งแล้วแต่อ่านผลไม่ได้ ไม่ใช่ความล้มเหลว)
   // บอกคนที่กดปุ่มไปเลยว่าแจ้งเตือนในแอปบันทึกแล้วแต่ LINE ไม่ออก จะได้ไม่เข้าใจผิดว่าส่งไปแล้ว
   if(res && res.ok === false) toast('บันทึกแล้ว แต่ส่ง LINE ไม่ออก — ดูสาเหตุที่หน้าตั้งค่า > บันทึกการส่ง LINE', true);
@@ -1525,6 +1573,27 @@ async function notifyOrderRequester(o, message){
     fallbackRole: 'requester',
   });
 }
+/* แจ้งเตือนช่างที่ถูกมอบหมาย "รายคน" — ทั้งกระดิ่งในแอปและ LINE
+   เดิมช่างได้ผ่าน sendLineToTech() ซึ่งเป็น LINE ล้วน (ตัดออกแล้ว) ไม่มี pushNotification('tech', …) อยู่เลย
+   สักที่ในไฟล์ (แท็บ "การแจ้งเตือน" ในชีตจึงมี fm/gm/maint/requester เท่านั้น ไม่มี tech สักแถว
+   ตั้งแต่เปิดระบบมา) ผลคือช่างที่ยังไม่ถูกผูก LINE หรือช่วงที่ token พัง = ไม่ได้รับอะไรเลย
+   และไม่มีร่องรอยค้างไว้ให้ย้อนดูด้วย
+   message = ข้อความสั้นสำหรับกระดิ่ง · lineText = ข้อความเต็มสำหรับ LINE (มีรายละเอียดเครื่องจักร)
+
+   ช่างที่ยังไม่มี LINE (ศิลป์ทวี, ไกรทอง, ช่างฐิติวัชร์) = "ไม่ยิงเลย" โดยตั้งใจ ไม่ใช่ความล้มเหลว
+   สามคนนี้ไม่มีแถวใน accessRequests และ userId ในชีตสิทธิ์ก็ว่าง จึง "ล็อกอินเข้าแอปไม่ได้" ด้วย
+   กดปุ่มเริ่ม/จบงานเองไม่ได้อยู่แล้ว (ดู canUpdateOpinionProgress และปุ่มใน renderDetail)
+   หน้างานจึงต้องจัดให้ไปคู่กับช่างที่มี LINE เสมอ คนคู่คือทั้งผู้รับแจ้งเตือนและคนกดปุ่มแทน
+   — เป็นเรื่องที่ ผจก.แผนกซ่อมบำรุงจัดเองได้ด้วยตรรกะ ไม่ต้องมีระบบจับคู่ในโค้ด
+   จึงไม่ใส่ fallbackRole — ไม่งั้น relay จะไปไล่หาแถวตามชื่อช่างในชีตแล้วตอบ sent:0 กลับมา
+   ทำให้คนที่กดปุ่มโดน toast "ส่ง LINE ไม่ออก" ทุกครั้งทั้งที่เป็นพฤติกรรมที่ตั้งใจ
+   (ถ้าวันหลังผูก LINE ให้เขาแล้ว lineIdsForPerson() จะหาเจอเองทันที ไม่ต้องแก้โค้ดตรงนี้) */
+async function notifyTech(o, techName, message, lineText){
+  const userIds = lineIdsForPerson({ techName });
+  return await pushNotification('tech', o.id, o.docNumber, message, {
+    userIds, name: techName,
+  }, { lineText, label: o.docNumber + ' → ช่าง ' + techName, optionalLine: true });
+}
 /* การแจ้งเตือนใบนี้เป็นของเรารึเปล่า (กระดิ่ง/หน้าการแจ้งเตือนในแอป)
    admin เห็นทุกอัน ส่วนคนอื่นเห็นเฉพาะบทบาทตัวเอง และถ้าเป็นการแจ้งเตือนแบบเจาะจงคน
    ต้องเป็นเราจริงๆ เท่านั้น (เทียบรหัสประจำเครื่องก่อน ไม่มีค่อยเทียบชื่อ) */
@@ -1532,7 +1601,10 @@ function notifIsMine(n){
   if(state.role === 'admin') return true;
   if(n.toRole !== state.role) return false;
   if(n.toDidHash) return n.toDidHash === state.didHash;
-  if(n.toName) return samePersonName(n.toName, state.myName);
+  // ช่างถูกอ้างด้วย "ชื่อช่าง" (เช่น 'ศักดา  สนผา (ผช.ผจก.แผนกวิศวกรรม)') ซึ่งมักไม่ตรงกับชื่อที่กรอก
+  // ไว้ตอนขอสิทธิ์ ('ศักดา สนผา') จึงต้องเทียบกับ techIdentities ด้วย ไม่ใช่ myName อย่างเดียว
+  if(n.toName) return samePersonName(n.toName, state.myName)
+    || (state.techIdentities || []).some(t => samePersonName(t, n.toName));
   return true;   // การแจ้งเตือนเก่าที่ยังไม่มีเจ้าของเจาะจง — คงพฤติกรรมเดิมไว้
 }
 function unreadCountForRole(role){
@@ -2003,6 +2075,7 @@ async function openDetail(id){
   state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
   state.detailPhotos = [];   // ล้างรูปของใบก่อนหน้าก่อนเสมอ ไม่งั้นจะค้างโผล่บนใบใหม่ชั่วครู่
   // mark related notifications read for current role (admin: all roles' notifications for this order)
+  // ทำเครื่องหมาย "อ่านแล้ว" ในหน่วยความจำก่อน เพื่อให้ตัวเลขบนกระดิ่งลดทันทีที่กด
   let changed = false;
   state.notifications.forEach(n => { if(n.orderId === id && !n.read && notifIsMine(n)){ n.read = true; changed = true; } });
   // วาดหน้ารายละเอียด "ทันทีที่รู้ว่าจะเปิดใบไหน" แล้วค่อยเติมรูปแนบตามมาทีหลัง — เดิม render() อยู่
@@ -2010,7 +2083,13 @@ async function openDetail(id){
   // ซึ่งบนเส้นทาง "กดลิงก์จากไลน์" คือรอบที่สามต่อกัน (เช็คสิทธิ์ → ขอใบ → ขอรูป) ผู้ใช้จึงค้างอยู่
   // หน้าที่ไม่เกี่ยวข้องหลายวินาทีกว่าจะถึงใบที่ตั้งใจเปิด
   render();
-  if(changed) storeSet('notifications', state.notifications);   // ไม่ต้องรอ — ไม่มีใครใช้ผลลัพธ์ต่อ
+  // เดิมบรรทัดนี้เป็น storeSet('notifications', state.notifications) แบบยิงทิ้ง — เอาอาร์เรย์ใน
+  // หน่วยความจำ (ซึ่งอาจเก่ากว่าของบนเซิร์ฟเวอร์อยู่หลายแถว) ทับทั้งก้อนทุกครั้งที่มีคนเปิดใบ
+  // แค่ "เปิดดูใบ" จึงลบแจ้งเตือนของคนอื่นทิ้งได้ และมันเกิดบ่อยที่สุดในระบบ
+  if(changed) saveNotifications(list => {
+    list.forEach(n => { if(n.orderId === id && !n.read && notifIsMine(n)) n.read = true; });
+    return list;
+  });
   const photos = await storeGet('photos:'+id);
   // ผู้ใช้อาจกดออกจากใบนี้ไปแล้วระหว่างรอ — อย่าเอารูปของใบเก่าไปแปะทับหน้าที่กำลังดูอยู่
   if(state.selectedOrderId !== id || state.view !== 'detail') return;
@@ -2228,7 +2307,9 @@ async function assignTechnician(id){
   await persistOrders();
   await notifyOrderRequester(o, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`);
   for(const tech of techs){
-    await sendLineToTech(tech, `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
+    await notifyTech(o, tech,
+      `คุณได้รับมอบหมายงานซ่อม (${o.machineCode} — ${o.machineName}) กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}`,
+      `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
   }
   state.ui.assignTechs = [''];
   state.ui.assignStartDate = '';
@@ -2266,14 +2347,14 @@ async function saveMaintRecord(id){
   const parts = state.ui.maintRecordParts
     .filter(p => p.name.trim())
     .map(p => ({ name:p.name.trim(), qty:p.qty.trim(), unit:p.unit.trim(), price:p.price.trim(), shop:p.shop.trim(), note:p.note.trim() }));
-  const prevOpinion = o.maintRecord && o.maintRecord.inspectorOpinion;
+  const prevOpinion = progressTrackOf(o), prevLabel = progressTrackLabel(o);
   o.maintRecord = { causeAnalysis: cause, inspectorOpinion: opinion, parts, updatedBy: ROLES.maint.label, updatedAt: nowIso() };
   // เปลี่ยนแนวทางแล้ว หมุดความคืบหน้าของแนวทางเดิมใช้ต่อไม่ได้ (คนละชุดขั้นตอน) — ล้างทิ้ง
   // แล้วบันทึกไว้ใน "ลำดับเหตุการณ์" ว่าเปลี่ยนจากอะไรเป็นอะไร ประวัติหมุดเดิมยังอ่านย้อนได้จากที่นั่น
   if(prevOpinion && prevOpinion !== opinion && o.opinionProgress){
     o.opinionProgress = null;
     o.statusHistory.push({ status:o.status, at: nowIso(),
-      note:'เปลี่ยนแนวทางจาก "' + (INSPECTOR_OPINION_META[prevOpinion]||prevOpinion) + '" เป็น "' + INSPECTOR_OPINION_META[opinion] + '" — ล้างความคืบหน้าเดิมของแนวทางก่อนหน้า' });
+      note:'เปลี่ยนแนวทางจาก "' + prevLabel + '" เป็น "' + INSPECTOR_OPINION_META[opinion] + '" — ล้างความคืบหน้าเดิมของแนวทางก่อนหน้า' });
   }
   o.statusHistory.push({ status:o.status, at: nowIso(), note:'ผู้จัดการแผนกซ่อมบำรุงบันทึกข้อมูลซ่อมบำรุง (วิเคราะห์สาเหตุ/รายการอะไหล่)' });
   await persistOrders();
@@ -2283,17 +2364,39 @@ async function saveMaintRecord(id){
 
 /* ============================= ความคืบหน้าตามความคิดเห็นของช่างผู้ตรวจสอบ ============================= */
 function opinionStepsFor(opinion){ return OPINION_STEPS[opinion] || []; }
+/* "การดำเนินงาน" ที่เลือกตอนมอบหมาย → ชุดหมุดที่ต้องตาม (ใช้เมื่อยังไม่มีบันทึกข้อมูลซ่อมบำรุง)
+   ต้องการสั่งซื้ออุปกรณ์ = รอสั่งของ → รอของมาส่ง ซึ่งเป็นขั้นตอนเดียวกับแนวทาง "ซื้ออุปกรณ์มาทำเอง"
+   ส่วน immediate / use_existing ไม่มีอะไรต้องรอจากข้างนอก จึงไม่มีหมุด (เหมือนเดิม) */
+const PLAN_PROGRESS_TRACK = { need_purchase: 'buy_parts' };
+/* แนวทางที่ใช้กำหนดหมุดความคืบหน้าของใบนี้ — ความคิดเห็นของช่างผู้ตรวจสอบมาก่อนเสมอ (ละเอียดกว่า)
+   ไม่มีบันทึกนั้นค่อยตกมาใช้ "การดำเนินงาน" ที่ ผจก.แผนกซ่อมบำรุงเลือกไว้ตอนมอบหมาย
+   เดิมหมุดผูกกับ maintRecord อย่างเดียว ใบที่มอบหมายแล้วเลือก "ต้องการสั่งซื้ออุปกรณ์" ไว้จึงไม่มี
+   หมุดให้กดสักขั้น ทั้งที่กำลังรอของอยู่จริง และ notifyOpinionStep() (ตัวเดียวที่แจ้งครบทั้งผู้แจ้ง +
+   ผจก.แผนกซ่อมบำรุง + ช่าง) ไม่มีทางถูกเรียกเลย — ST-WH005/26 เป็นเคสนี้เป๊ะ */
+function progressTrackOf(o){
+  const op = o.maintRecord && o.maintRecord.inspectorOpinion;
+  if(op && OPINION_STEPS[op]) return op;
+  return PLAN_PROGRESS_TRACK[(o.assignment && o.assignment.executionPlan) || ''] || '';
+}
+/* ชื่อแนวทางที่เอาไว้โชว์/ใส่ในข้อความแจ้งเตือน — ต้องเรียกตามที่ผู้ใช้เลือกไว้จริง
+   ใบที่หมุดมาจาก "การดำเนินงาน" ต้องขึ้นว่า "ต้องการสั่งซื้ออุปกรณ์" ไม่ใช่ "ซื้ออุปกรณ์มาทำเอง" */
+function progressTrackLabel(o){
+  const op = o.maintRecord && o.maintRecord.inspectorOpinion;
+  if(op && OPINION_STEPS[op]) return INSPECTOR_OPINION_META[op] || op;
+  const plan = (o.assignment && o.assignment.executionPlan) || '';
+  return PLAN_PROGRESS_TRACK[plan] ? (EXECUTION_PLAN_META[plan] || plan) : '';
+}
 /* หมุดที่บันทึกไว้ของ "แนวทางปัจจุบัน" เท่านั้น — ถ้า ผจก.แผนกซ่อมบำรุงเปลี่ยนความคิดเห็น
    ภายหลัง (เช่นจากซื้ออุปกรณ์มาทำเอง เป็นส่งซ่อม) หมุดของแนวทางเดิมไม่ใช่ความคืบหน้าของ
    แนวทางใหม่ จึงไม่นำมาแสดง/นับต่อ แต่ยังคงอยู่ในข้อมูลและใน "ลำดับเหตุการณ์" ให้ย้อนดูได้ */
 function opinionProgressOf(o){
   const p = o.opinionProgress;
-  if(!p || !o.maintRecord || p.opinion !== o.maintRecord.inspectorOpinion) return {};
+  if(!p || p.opinion !== progressTrackOf(o)) return {};
   return p.steps || {};
 }
 /* หมุดล่าสุดที่บันทึกแล้ว (ไว้โชว์ป้ายสรุปในรายการแจ้งซ่อม) */
 function latestOpinionStep(o){
-  const steps = opinionStepsFor(o.maintRecord && o.maintRecord.inspectorOpinion);
+  const steps = opinionStepsFor(progressTrackOf(o));
   const done = opinionProgressOf(o);
   let last = null;
   for(const s of steps){ if(done[s.key]) last = s; else break; }
@@ -2302,7 +2405,7 @@ function latestOpinionStep(o){
 /* ขั้นแรกที่ยังไม่ถูกบันทึก = สิ่งที่ใบนี้ "ค้างรออยู่" ตอนนี้ (null = ครบทุกขั้นแล้ว หรือใบนี้
    ไม่มีแนวทางที่ต้องตามหมุด) */
 function opinionPendingStep(o){
-  const steps = opinionStepsFor(o.maintRecord && o.maintRecord.inspectorOpinion);
+  const steps = opinionStepsFor(progressTrackOf(o));
   const done = opinionProgressOf(o);
   return steps.find(s => !done[s.key]) || null;
 }
@@ -2340,7 +2443,7 @@ async function saveOpinionStep(id){
   const o = getOrder(id); if(!o) return;
   if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
   if(!canUpdateOpinionProgress(o)){ toast('ท่านไม่มีสิทธิ์อัปเดตความคืบหน้าของใบนี้', true); return; }
-  const opinion = o.maintRecord && o.maintRecord.inspectorOpinion;
+  const opinion = progressTrackOf(o);
   const steps = opinionStepsFor(opinion);
   const idx = steps.findIndex(s => s.key === state.ui.opinionStepKey);
   if(idx < 0){ toast('ไม่พบขั้นตอนที่ต้องการบันทึก', true); return; }
@@ -2376,7 +2479,7 @@ async function saveOpinionStep(id){
 /* แจ้งเตือน "ผู้ที่เกี่ยวข้อง" ของหมุดหนึ่งๆ = ผู้แจ้งซ่อมเจ้าของใบ + ผจก.แผนกซ่อมบำรุง
    + ช่างทุกคนที่ถูกมอบหมายใบนี้ (ช่างรับผ่าน LINE อย่างเดียว ไม่ต้องมีสิทธิ์ในแอปก็ได้รับ) */
 async function notifyOpinionStep(o, step, date, note, isEdit){
-  const head = (isEdit ? '[แก้ไขข้อมูล] ' : '') + INSPECTOR_OPINION_META[o.opinionProgress.opinion] + ': ';
+  const head = (isEdit ? '[แก้ไขข้อมูล] ' : '') + progressTrackLabel(o) + ': ';
   const body = step.notify + ' (' + step.dateLabel + ' ' + fmtDate(date) + ')' + (note ? '\nหมายเหตุ: ' + note : '');
   // เพิ่งบันทึกหมุดสุดท้ายครบ = ของมาถึง/งานกลับมาแล้ว บอกก้าวถัดไปให้ชัดในข้อความเลย
   // ข้อความต่างกันตามว่าช่างเริ่มซ่อมไปก่อนแล้วหรือยัง — สองกรณีนี้เกิดจริงทั้งคู่หน้างาน
@@ -2393,7 +2496,8 @@ async function notifyOpinionStep(o, step, date, note, isEdit){
   await notifyOrderRequester(o, head + body + hint);
   await pushNotification('maint', o.id, o.docNumber, head + body + hint);
   for(const tech of assignedTechs(o)){
-    await sendLineToTech(tech, '[' + o.docNumber + '] ' + head + body + techHint
+    await notifyTech(o, tech, head + body + techHint,
+      '[' + o.docNumber + '] ' + head + body + techHint
       + '\nเครื่องจักร: ' + o.machineCode + ' — ' + o.machineName + '\n' + orderDeepLink(o.id, 'tech'));
   }
 }
@@ -2429,7 +2533,9 @@ async function verifyRepair(id, type, note){
     await persistOrders();
     await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`);
     for(const tech of assignedTechs(o)){
-      await sendLineToTech(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
+      await notifyTech(o, tech,
+        `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย${n ? ' — หมายเหตุจากผู้แจ้ง: ' + n : ''}`,
+        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
     }
     toast('ยืนยันผลการซ่อมเรียบร้อย ปิดงาน');
   } else {
@@ -2442,7 +2548,9 @@ async function verifyRepair(id, type, note){
     const techs = assignedTechs(o);
     await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`);
     for(const tech of techs){
-      await sendLineToTech(tech, `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
+      await notifyTech(o, tech,
+        `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม — สาเหตุ: ${n}`,
+        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
     }
     toast('ส่งกลับเพื่อซ่อมเพิ่มเติมแล้ว');
   }
@@ -2484,6 +2592,7 @@ async function confirmResetAllData(){
 }
 async function resetAllData(){
   state.counters = {}; state.orders = []; state.notifications = [];
+  pendingNotifs.clear();   // ไม่งั้นแถวที่ยังค้างยืนยันจะถูกยัดกลับเข้ามาหลังล้างข้อมูล
   await storeSet('counters', state.counters);
   await storeSet('orders', state.orders); await storeSet('notifications', state.notifications);
   toast('ล้างข้อมูลระบบเรียบร้อย');
@@ -2697,7 +2806,7 @@ function renderList(){
     const opPill = opWaiting
       ? `<span class="status-pill" style="color:#c17f1e; background:#fbf0dd;">⏳ ${escapeHtml(opWaiting)}</span>`
       : opStep
-        ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${INSPECTOR_OPINION_META[o.maintRecord.inspectorOpinion]}: ${escapeHtml(opStep.doneLabel)}</span>`
+        ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${escapeHtml(progressTrackLabel(o))}: ${escapeHtml(opStep.doneLabel)}</span>`
         : '';
     return `
     <div class="order-card" style="border-left-color:${meta.color}">
@@ -2872,14 +2981,20 @@ function renderDetail(){
       ${noteBox()}
     </div>`;
   } else if(hasRole('maint') && o.status==='PENDING_ASSIGN'){
+    // คำนวณครั้งเดียวนอกลูป — ใช้ทั้งติดป้ายในดรอปดาวน์และเตือนใต้รายการ
+    const techLine = {};
+    (state.config.technicians || []).forEach(t => { techLine[t] = techHasLine(t); });
+    const techOptionsFor = (val) => (state.config.technicians || []).map(t =>
+      `<option value="${escapeHtml(t)}" ${val === t ? 'selected' : ''}>${escapeHtml(t)}${techLine[t] ? '' : ' — ไม่มี LINE'}</option>`).join('');
     const rows = state.ui.assignTechs.map((val, i) => `
       <div class="inline-form" style="margin-bottom:6px;">
         <select class="input" onchange="setAssignTech(${i}, this.value)">
           <option value="">-- เลือกช่าง --</option>
-          ${state.config.technicians.map(t=>`<option value="${escapeHtml(t)}" ${val===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}
+          ${techOptionsFor(val)}
         </select>
         ${state.ui.assignTechs.length>1 ? `<button class="btn btn-outline btn-sm" onclick="removeAssignTechRow(${i})">✕</button>` : ''}
       </div>`).join('');
+
     actionBox = `
     <div class="action-box">
       <h4>รับใบแจ้งซ่อม / มอบหมายช่างผู้รับผิดชอบ</h4>
@@ -2999,7 +3114,7 @@ function renderDetail(){
   // ความคืบหน้าตามแนวทางที่เลือกไว้ในบันทึกข้อมูลซ่อมบำรุง — เห็นได้ทุกบทบาท (ผู้แจ้งจะได้เลิกตามถาม)
   // แต่กดบันทึกได้เฉพาะ ผจก.แผนกซ่อมบำรุง / admin / ช่างที่ถูกมอบหมายใบนี้ (canUpdateOpinionProgress)
   let opinionProgressSection = '';
-  const opinionKey = o.maintRecord && o.maintRecord.inspectorOpinion;
+  const opinionKey = progressTrackOf(o);
   const opSteps = opinionStepsFor(opinionKey);
   if(opSteps.length){
     const doneSteps = opinionProgressOf(o);
@@ -3045,7 +3160,7 @@ function renderDetail(){
     }).join('');
     opinionProgressSection = `
     <div class="action-box">
-      <h4>ความคืบหน้า: ${INSPECTOR_OPINION_META[opinionKey]} (${finishedCount}/${opSteps.length})</h4>
+      <h4>ความคืบหน้า: ${escapeHtml(progressTrackLabel(o))} (${finishedCount}/${opSteps.length})</h4>
       <p class="desc" style="margin:0 0 12px; font-size:12.5px; color:var(--slate);">
         ${canUpdate ? 'ทุกครั้งที่บันทึก ระบบจะแจ้งเตือนผู้แจ้งซ่อม ผู้จัดการแผนกซ่อมบำรุง และช่างผู้รับผิดชอบโดยอัตโนมัติ'
                     : 'อัปเดตได้โดยผู้จัดการแผนกซ่อมบำรุงหรือช่างผู้รับผิดชอบใบนี้'}
@@ -3098,8 +3213,11 @@ function renderDetail(){
 
 /* ============================= RENDER: NOTIFICATIONS ============================= */
 async function markAllRead(){
-  state.notifications.forEach(n => { if(notifIsMine(n)) n.read = true; });
-  await storeSet('notifications', state.notifications);
+  const ok = await saveNotifications(list => {
+    list.forEach(n => { if(notifIsMine(n)) n.read = true; });
+    return list;
+  });
+  if(!ok) toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true);
   render();
 }
 function renderNotif(){
@@ -3368,7 +3486,8 @@ function renderSettings(){
     ? `<p class="desc">ยังไม่มีการส่งในรอบนี้</p>`
     : `<table class="mini"><tr><th>เวลา</th><th>รายการ</th><th>ผล</th></tr>${log.map(e => {
         const t = new Date(e.at).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-        const mark = e.ok === true ? `✅ ส่ง ${e.sent} ข้อความ` : (e.ok === null ? '⚠️ ไม่ทราบผล' : '❌ ไม่ถึงใคร');
+        const mark = e.skipped ? '⏭️ ข้าม (ตั้งใจ)'
+          : e.ok === true ? `✅ ส่ง ${e.sent} ข้อความ` : (e.ok === null ? '⚠️ ไม่ทราบผล' : '❌ ไม่ถึงใคร');
         // ตัวเลขทีละขั้น: แอปหาผู้รับได้กี่คน → relay หาได้กี่คน → LINE รับไปกี่ข้อความ
         // ดูปุ๊บรู้ทันทีว่าขาดตอนที่ขั้นไหน โดยไม่ต้องเปิด Apps Script หรือแท็บ Relay Log
         const chain = (e.wanted != null || e.targets != null)
@@ -3767,7 +3886,12 @@ async function pollForUpdates(){
     if(lineRecipients && JSON.stringify(lineRecipients) !== JSON.stringify(state.lineRecipients)){ state.lineRecipients = lineRecipients; changed = true; }
     if(cfg && JSON.stringify(cfg) !== JSON.stringify(state.config)){ state.config = cfg; changed = true; }
     if(orders && JSON.stringify(orders) !== JSON.stringify(state.orders)){ state.orders = orders; changed = true; }
-    if(notifs && JSON.stringify(notifs) !== JSON.stringify(state.notifications)){ state.notifications = notifs; changed = true; }
+    // ห้ามเอาค่าจากเซิร์ฟเวอร์ทับตรงๆ — Apps Script อ่านหลังเขียนมีดีเลย์ รอบที่วิ่งคาบเกี่ยวกับ
+    // pushNotification() ที่ยังค้างรอ LINE อยู่จะได้ค่าเก่ากลับมา แล้วลบแถวที่เพิ่งเพิ่มทิ้ง (ดู mergePendingNotifs)
+    if(notifs){
+      const mergedNotifs = mergePendingNotifs(notifs);
+      if(JSON.stringify(mergedNotifs) !== JSON.stringify(state.notifications)){ state.notifications = mergedNotifs; changed = true; }
+    }
     // กันเหนียว: ถ้า loadBackground() พลาดไปด้วยเหตุผลใดก็ตาม รอบ poll ถัดไปที่ได้ orders มาจริง
     // จะปลดล็อกปุ่มบันทึกต่างๆ ให้เองแทน ไม่ต้องรอ refresh หน้า
     if(orders && !state.ordersLoaded) state.ordersLoaded = true;
