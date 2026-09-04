@@ -1328,8 +1328,9 @@ function lineIdsForPerson({ lineUserId = '', didHash = '', techName = '', name =
   }
   return out;
 }
-/* ช่างคนนี้มีปลายทาง LINE ให้ยิงหรือยัง — ใช้บอก ผจก.แผนกซ่อมบำรุงตั้งแต่ตอนเลือกช่าง
-   ว่าคนไหนจะไม่ได้ข้อความ จะได้ใส่ช่างที่มี LINE ไปคู่กันในใบเดียวกัน (ดูหมายเหตุใน notifyTech) */
+/* ช่างคนนี้มีปลายทาง LINE ให้ยิงหรือยัง — ใช้ติดป้ายในดรอปดาวน์ตอนมอบหมายเท่านั้น
+   ผจก.แผนกซ่อมบำรุงจำไม่ได้หรอกว่าใครในแปดคนถูกผูกไว้แล้วบ้าง แค่เห็นป้ายก็รู้เอง
+   ว่าต้องจัดคู่กับใคร — ไม่ต้องมีกฎในโค้ดมาบังคับ */
 function techHasLine(techName){ return lineIdsForPerson({ techName }).length > 0; }
 /* ผู้แจ้งซ่อมของใบนี้คนเดียว ไม่ใช่ทุกคนที่มีบทบาท "ผู้แจ้งซ่อม" */
 function orderRequesterLineIds(o){
@@ -1542,7 +1543,7 @@ async function pushNotification(toRole, orderId, docNumber, message, target, opt
   if(target && o.optionalLine && !(target.userIds || []).length && !target.fallbackRole){
     // ตั้งใจไม่ยิง (ดู notifyTech) — บันทึกไว้ในบันทึกการส่งว่า "ข้าม" ให้ต่างจาก "ส่งไม่ออก" ชัดเจน
     logLineSend({ label, skipped:true, ok:true, sent:0, wanted:0,
-      note:(target.name || 'ผู้รับ') + ' ยังไม่ได้ผูก LINE — บันทึกไว้ในแอปแล้ว ไม่ได้ส่ง LINE' });
+      note:(target.name || 'ผู้รับ') + ' ยังไม่ได้ผูก LINE — ไม่ได้ส่ง (คู่งานที่มี LINE ในใบเดียวกันเป็นคนรับแทน)' });
     res = { ok:true, sent:0 };
   } else {
     res = target
@@ -1579,9 +1580,11 @@ async function notifyOrderRequester(o, message){
    และไม่มีร่องรอยค้างไว้ให้ย้อนดูด้วย
    message = ข้อความสั้นสำหรับกระดิ่ง · lineText = ข้อความเต็มสำหรับ LINE (มีรายละเอียดเครื่องจักร)
 
-   ช่างที่ยังไม่มี LINE (เช่น ศิลป์ทวี, ไกรทอง) = "ไม่ยิงเลย" โดยตั้งใจ ไม่ใช่ความล้มเหลว
-   วิธีทำงานที่ตกลงกันไว้คือตอนมอบหมายให้ใส่ช่างที่มี LINE ไปคู่กันในใบเดียวกัน (ฟอร์มรองรับหลายคน
-   อยู่แล้ว) คนคู่จึงได้ LINE แทน ส่วนเจ้าตัวยังเห็นงานของตัวเองที่กระดิ่งในแอปครบเหมือนเดิม
+   ช่างที่ยังไม่มี LINE (ศิลป์ทวี, ไกรทอง, ช่างฐิติวัชร์) = "ไม่ยิงเลย" โดยตั้งใจ ไม่ใช่ความล้มเหลว
+   สามคนนี้ไม่มีแถวใน accessRequests และ userId ในชีตสิทธิ์ก็ว่าง จึง "ล็อกอินเข้าแอปไม่ได้" ด้วย
+   กดปุ่มเริ่ม/จบงานเองไม่ได้อยู่แล้ว (ดู canUpdateOpinionProgress และปุ่มใน renderDetail)
+   หน้างานจึงต้องจัดให้ไปคู่กับช่างที่มี LINE เสมอ คนคู่คือทั้งผู้รับแจ้งเตือนและคนกดปุ่มแทน
+   — เป็นเรื่องที่ ผจก.แผนกซ่อมบำรุงจัดเองได้ด้วยตรรกะ ไม่ต้องมีระบบจับคู่ในโค้ด
    จึงไม่ใส่ fallbackRole — ไม่งั้น relay จะไปไล่หาแถวตามชื่อช่างในชีตแล้วตอบ sent:0 กลับมา
    ทำให้คนที่กดปุ่มโดน toast "ส่ง LINE ไม่ออก" ทุกครั้งทั้งที่เป็นพฤติกรรมที่ตั้งใจ
    (ถ้าวันหลังผูก LINE ให้เขาแล้ว lineIdsForPerson() จะหาเจอเองทันที ไม่ต้องแก้โค้ดตรงนี้) */
@@ -2991,17 +2994,7 @@ function renderDetail(){
         </select>
         ${state.ui.assignTechs.length>1 ? `<button class="btn btn-outline btn-sm" onclick="removeAssignTechRow(${i})">✕</button>` : ''}
       </div>`).join('');
-    // ช่างที่เลือกไว้แล้วแต่ยังไม่มี LINE — บอกตั้งแต่ตอนนี้ ดีกว่าไปรู้ทีหลังว่าเขาไม่ได้ข้อความ
-    const pickedTechs = [...new Set(state.ui.assignTechs.filter(Boolean))];
-    const noLineTechs = pickedTechs.filter(t => !techLine[t]);
-    const someoneHasLine = pickedTechs.some(t => techLine[t]);
-    const noLineHint = !noLineTechs.length ? '' : `
-      <p class="desc" style="margin:6px 0 0; font-size:12.5px; color:${someoneHasLine ? 'var(--slate)' : 'var(--danger)'};">
-        ${someoneHasLine ? '💡' : '⚠️'} <b>${escapeHtml(noLineTechs.join(', '))}</b> ยังไม่ได้ผูก LINE
-        จึงจะไม่ได้รับข้อความ (เห็นงานได้ที่กระดิ่งในแอปเท่านั้น)
-        ${someoneHasLine ? '— มีช่างที่มี LINE อยู่ในใบนี้แล้ว ข้อความจะถึงคู่งานเรียบร้อย'
-                         : '— แนะนำให้กด "+ เพิ่มช่าง" แล้วใส่ช่างที่มี LINE ไปด้วยหนึ่งคน'}
-      </p>`;
+
     actionBox = `
     <div class="action-box">
       <h4>รับใบแจ้งซ่อม / มอบหมายช่างผู้รับผิดชอบ</h4>
@@ -3012,7 +3005,6 @@ function renderDetail(){
       <label class="field-label">การมอบหมายงาน — ช่างผู้รับผิดชอบ <span class="req-star">*</span></label>
       ${rows}
       <button class="btn btn-outline btn-sm" onclick="addAssignTechRow()">+ เพิ่มช่าง</button>
-      ${noLineHint}
       <div class="grid-2" style="margin:14px 0 10px;">
         <div class="field" style="margin-bottom:0;">
           <label class="field-label">วันที่เริ่มงาน <span class="req-star">*</span></label>
