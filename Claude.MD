@@ -772,8 +772,45 @@ plan (`assignment.executionPlan`: `immediate`/`need_purchase`/
 editable-any-time-after-assignment "บันทึกข้อมูลซ่อมบำรุง" record
 (`order.maintRecord`: `causeAnalysis`, `inspectorOpinion` — see
 `INSPECTOR_OPINION_META` — and a `parts[]` table of
-name/qty/unit/price/shop/note) that `maint` fills in and every role can
-view read-only once a job is assigned.
+name/qty/unit/price/shop/note) that every role can view read-only once a job
+is assigned.
+Who may edit it: `maint` (so `admin` too, via `hasRole`) **and any technician
+assigned to that order** — `canEditMaintRecord()`, the same test as
+`canUpdateOpinionProgress()` and for the same reason. The person who knows
+why the machine broke, whether it should be repaired in-house or sent out,
+and what was actually fitted is the technician holding the spanner, not the
+manager signing the form; before this they wrote it on paper for `maint` to
+retype, so it arrived late and lost detail. Everyone else still sees the
+record read-only. It is deliberately not gated on order status either —
+forgotten parts are usually remembered after "ซ่อมเสร็จสิ้น", and `maint`
+could always edit a closed order anyway.
+Opening it wide is paid for with an audit trail. `maintRecordEditorName()`
+now fills `maintRecord.updatedBy` with the actual editor
+(`state.myTechName` → `state.myName` → role label); it used to hardcode
+`ROLES.maint.label`, which would now be a lie every time a technician saved.
+That name and `updatedAt` are shown as "แก้ไขล่าสุด" at the bottom of the
+read-only card, and `maintRecordChanges()` diffs the submitted record against
+the stored one so the `statusHistory` line and the notification both name the
+editor *and* which of the three fields moved, instead of an anonymous
+"someone edited the record". An empty diff means the save is a no-op: no
+history line, no notification, no `storeSet` at all.
+A technician's save fires `pushNotification('maint', …)` — `maint` owns the
+document and does the purchasing, so they need to know it changed; the
+requester deliberately gets nothing, as there is nothing for them to act on.
+`maint`/`admin` editing their own record notifies nobody.
+Both the button and `saveMaintRecord()` check `canEditMaintRecord()`, and
+`saveMaintRecord()` now checks `persistOrders()`'s return value and rolls
+back `maintRecord`/`opinionProgress`/`statusHistory` when the write failed,
+the way `saveOpinionStep()` does — it previously ignored the result and
+reported "บันทึกเรียบร้อย" over a write that never landed.
+`loadPartRows()` pads legacy `parts[]` rows with the missing columns
+(`PART_FIELDS`) before they reach the form, so an old row saved without,
+say, `note` can't white-screen the page on `p.name.trim()`.
+Because a technician can now change ความคิดเห็นของช่างผู้ตรวจสอบ, and that
+clears the milestone track (below), the dropdown carries an inline
+⚠️ warning saying so — rendered only when `opinionProgressOf()` actually has
+something to lose, so it doesn't nag on a fresh record.
+
 Following through on the ความคิดเห็นของช่างผู้ตรวจสอบ — picking one of the
 four `INSPECTOR_OPINION_META` options used to be the end of it: the record
 said "ซื้ออุปกรณ์มาทำเอง" and nothing anywhere said whether the parts had
@@ -813,7 +850,9 @@ a plan that no longer involves buying anything. Orders written before this
 change have no `opinionProgress` key at all and read as "nothing recorded".
 Who may press the buttons: `maint` (so `admin` too, via `hasRole`) and a
 technician assigned to that order (`canUpdateOpinionProgress()`). Everyone
-else sees the same box read-only.
+else sees the same box read-only. `canEditMaintRecord()` (the maintenance
+record, above) draws the same line for the same reason — keep the two
+together if either ever changes.
 Waiting on parts vs. actually being repaired — these milestones deliberately
 do NOT gate the technician's "▶ เริ่มดำเนินการซ่อม" / "✓ ซ่อมเสร็จสิ้น"
 buttons, because both real-world cases happen: a technician starts on what
