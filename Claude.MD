@@ -774,6 +774,45 @@ editable-any-time-after-assignment "บันทึกข้อมูลซ่�
 `INSPECTOR_OPINION_META` — and a `parts[]` table of
 name/qty/unit/price/shop/note) that `maint` fills in and every role can
 view read-only once a job is assigned.
+The parts table has a second, narrower editor of its own. The person who
+knows what was actually fitted — how many, at what price, from which shop —
+is the technician holding the spanner, not the manager signing the form, so
+a technician assigned to that order can edit `maintRecord.parts` directly
+instead of writing it on paper for `maint` to retype. The box therefore has
+two edit modes, switched by `state.ui.maintRecordMode`:
+* `'full'` (`openMaintRecord()` → `saveMaintRecord()`) — `maint`, so `admin`
+  too via `hasRole`. Cause analysis + inspector opinion + parts.
+* `'parts'` (`openMaintParts()` → `saveMaintParts()`) — a technician assigned
+  to this order (`canEditMaintParts()`, the same test as
+  `canUpdateOpinionProgress()` and for the same reason). Renders only the
+  parts table; `causeAnalysis`/`inspectorOpinion` are never read from the
+  form or written back, and `opinionProgress` is never cleared — switching
+  แนวทาง stays `maint`'s decision alone.
+Both modes render the same `partsEditor` template, so the two forms cannot
+drift apart in columns or buttons. A technician may start the parts list on
+an order `maint` has not written anything on yet: the record is created with
+both of `maint`'s fields empty, which `progressTrackOf()` ignores (an empty
+`inspectorOpinion` does not match `OPINION_STEPS`), so the milestones still
+fall back to the assignment's `executionPlan` exactly as before, and the
+read-only view shows "ยังไม่ได้บันทึก (ผจก.แผนกซ่อมบำรุง)" for the two empty
+fields rather than blanks.
+Every parts save stamps `maintRecord.partsUpdatedBy` / `partsUpdatedAt`
+(shown as "แก้ไขรายการอะไหล่ล่าสุด" in the read-only view) and appends a
+`statusHistory` line naming the editor and the row count — the audit trail is
+why parts editing is deliberately *not* gated on order status: parts get
+remembered after "ซ่อมเสร็จสิ้น", and `maint` could always edit a closed
+order anyway. `saveMaintRecord()` carries an unchanged `partsUpdatedBy`
+forward (via `samePartsList()`) so `maint` pressing บันทึก without touching
+the table does not silently take credit for the technician's rows.
+A technician's save fires `pushNotification('maint', …)` — `maint` owns the
+document and does the purchasing, so they need to know the parts changed; the
+requester deliberately gets nothing, as there is nothing for them to do about
+it. A save that changes nothing writes nothing (no history line, no
+notification, no `storeSet`).
+Both save paths now check `persistOrders()`'s return value and roll back
+`maintRecord`/`opinionProgress`/`statusHistory` when the write failed, the
+same way `saveOpinionStep()` does. `saveMaintRecord()` previously ignored it
+and reported "บันทึกเรียบร้อย" over a write that never landed.
 Following through on the ความคิดเห็นของช่างผู้ตรวจสอบ — picking one of the
 four `INSPECTOR_OPINION_META` options used to be the end of it: the record
 said "ซื้ออุปกรณ์มาทำเอง" and nothing anywhere said whether the parts had
@@ -813,7 +852,9 @@ a plan that no longer involves buying anything. Orders written before this
 change have no `opinionProgress` key at all and read as "nothing recorded".
 Who may press the buttons: `maint` (so `admin` too, via `hasRole`) and a
 technician assigned to that order (`canUpdateOpinionProgress()`). Everyone
-else sees the same box read-only.
+else sees the same box read-only. `canEditMaintParts()` (the parts table,
+above) draws the same line for the same reason — keep the two together if
+either ever changes.
 Waiting on parts vs. actually being repaired — these milestones deliberately
 do NOT gate the technician's "▶ เริ่มดำเนินการซ่อม" / "✓ ซ่อมเสร็จสิ้น"
 buttons, because both real-world cases happen: a technician starts on what
