@@ -534,7 +534,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-04.3';
+const APP_VERSION = '2026-09-07.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1217,12 +1217,15 @@ function ensureNotifyRoutingReady(){
    แค่ตอน admin เข้าหน้านี้จริงๆ (เรียกจาก setView) ไม่ต้องรวมอยู่ใน initial load ของทุกคน */
 async function ensureLineDataLoaded(){
   if(state.lineDataLoaded) return;
-  const [lineUsers, lineUserRoles, lineRecipients] = await Promise.all([
-    storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')
+  // sendLog = การส่งที่ไม่สำเร็จซึ่งเก็บไว้บนเซิร์ฟเวอร์จาก "ทุกเครื่อง" (ดู queueSendLogRow)
+  // ผู้ดูแลระบบจึงตอบคำถาม "ทำไมคนนั้นไม่ได้รับแจ้งเตือนเมื่อวาน" ได้โดยไม่ต้องไปยืมเครื่องคนที่กดปุ่ม
+  const [lineUsers, lineUserRoles, lineRecipients, sendLog] = await Promise.all([
+    storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients'), storeGet('lineSendLog')
   ]);
   state.lineUsers = Array.isArray(lineUsers) ? lineUsers : [];
   state.lineUserRoles = (lineUserRoles && typeof lineUserRoles === 'object') ? lineUserRoles : {};
   state.lineRecipients = Array.isArray(lineRecipients) ? lineRecipients : [];
+  if(Array.isArray(sendLog)) state.lineSendLog = mergeSendLog(state.lineSendLog, sendLog);
   state.lineDataLoaded = true;
   render();
 }
@@ -1357,8 +1360,65 @@ function lineRelayUrl(role){
       ผิดพลาดถูกกลืนหายไปใน console.warn จึงตอบไม่ได้เลยว่า "ทำไมไม่ได้รับแจ้งเตือน" */
 function logLineSend(entry){
   if(!Array.isArray(state.lineSendLog)) state.lineSendLog = [];
-  state.lineSendLog.unshift(Object.assign({ at: Date.now() }, entry));
+  const row = Object.assign({ id: uid(), at: Date.now(), by: state.myName || state.role || '' }, entry);
+  state.lineSendLog.unshift(row);
   if(state.lineSendLog.length > 30) state.lineSendLog.length = 30;
+  // ...และเก็บเฉพาะ "ครั้งที่ไม่สำเร็จ" ไว้บนเซิร์ฟเวอร์ด้วย
+  // บันทึกในหน่วยความจำหายทุกครั้งที่รีเฟรช และอยู่แต่บนเครื่องของ "คนที่กดปุ่ม" เท่านั้น
+  // พอคนที่ควรได้รับมาถามทีหลังว่า "ทำไมไม่ได้รับแจ้งเตือน" จึงไม่เหลือหลักฐานให้ดูเลยสักอย่าง
+  // (ครั้งที่สำเร็จไม่ต้องเก็บ ไม่มีอะไรต้องสืบ และจะกินโควตา Apps Script เปล่าๆ)
+  if(row.ok !== true) queueSendLogRow(row);
+}
+/* เก็บบันทึกการส่งที่ไม่สำเร็จลงคีย์ 'lineSendLog' บนเซิร์ฟเวอร์ — ยิงแบบไม่รอผล (ห้ามหน่วงการกดปุ่ม)
+   รวมหลายแถวของการกดครั้งเดียวกันให้เขียนรอบเดียว และอ่านของล่าสุดมาเป็นฐานก่อนเขียนเสมอ
+   เพื่อไม่ให้สองเครื่องเขียนทับกัน (แบบเดียวกับ saveNotifications)
+
+   ข้อจำกัดที่ต้องระวัง: ทุกคีย์ KV ถูกเก็บเป็น "ข้อความในเซลล์เดียว" ของ Google Sheet ซึ่งรับได้
+   50,000 ตัวอักษร เกินแล้ว setValue จะพัง = เขียนคีย์นี้ไม่ได้อีกเลย จึงต้องตัดทั้งรายฟิลด์
+   (slimSendLogRow) และตัดทั้งก้อนตามความยาวจริงก่อนเขียนเสมอ */
+const SEND_LOG_KEEP = 30;
+const SEND_LOG_MAX_CHARS = 30000;
+function clip(v, n){ const t = String(v == null ? '' : v); return t.length > n ? t.slice(0, n) + '…' : t; }
+/* เหลือเฉพาะที่ใช้วินิจฉัยจริง และตัดความยาวทุกช่องที่ผู้อื่นเป็นคนกำหนดค่า (note/raw/errors มาจาก relay) */
+function slimSendLogRow(r){
+  const out = { id:r.id, at:r.at, by:clip(r.by, 60), label:clip(r.label, 120), ok:r.ok, sent:r.sent };
+  if(r.skipped) out.skipped = true;
+  if(r.wanted != null) out.wanted = r.wanted;
+  if(r.targets != null) out.targets = r.targets;
+  if(r.relayVersion) out.relayVersion = clip(r.relayVersion, 30);
+  if(r.note) out.note = clip(r.note, 300);
+  if(r.raw) out.raw = clip(r.raw, 200);
+  if((r.errors || []).length) out.errors = r.errors.slice(0, 3)
+    .map(x => ({ userId:clip(x.userId, 30), code:x.code, message:clip(x.message, 120) }));
+  return out;
+}
+let sendLogQueue = [], sendLogPromise = null;
+function queueSendLogRow(row){
+  sendLogQueue.push(slimSendLogRow(row));
+  if(sendLogPromise) return sendLogPromise;
+  sendLogPromise = new Promise(r => setTimeout(r, 0)).then(async () => {
+    const batch = sendLogQueue; sendLogQueue = []; sendLogPromise = null;
+    const latest = await storeGet('lineSendLog');
+    const base = Array.isArray(latest) ? latest : [];
+    const have = new Set(base.map(x => x && x.id));
+    let next = batch.filter(x => !have.has(x.id)).concat(base).slice(0, SEND_LOG_KEEP);
+    // ตัดตัวเก่าสุดทิ้งจนกว่าจะพอดีเซลล์ — ตัดจากท้ายเสมอ ของใหม่คือของที่กำลังต้องใช้สืบ
+    while(next.length > 1 && JSON.stringify(next).length > SEND_LOG_MAX_CHARS) next.pop();
+    return await storeSet('lineSendLog', next);
+  }).catch(e => { sendLogPromise = null; console.warn('เก็บบันทึกการส่ง LINE ลงเซิร์ฟเวอร์ไม่สำเร็จ', e); return false; });
+  return sendLogPromise;
+}
+/* รวมบันทึกของเครื่องนี้ (ครบทุกครั้ง แต่อยู่ในหน่วยความจำ) เข้ากับที่เก็บบนเซิร์ฟเวอร์
+   (เฉพาะครั้งที่ไม่สำเร็จ แต่มาจากทุกเครื่อง) — ตัดตัวซ้ำด้วย id แล้วเรียงใหม่สุดขึ้นก่อน */
+function mergeSendLog(mine, server){
+  const seen = new Set(), out = [];
+  [...(mine || []), ...(server || [])].forEach(r => {
+    if(!r) return;
+    const key = r.id || (r.at + '|' + (r.label || ''));
+    if(seen.has(key)) return;
+    seen.add(key); out.push(r);
+  });
+  return out.sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, SEND_LOG_KEEP);
 }
 /* เวอร์ชันของโค้ด relay (docs/line-relay.gs) ที่แอปรุ่นนี้คู่กัน — relay ตอบ version กลับมาทุกคำขอ
    ถ้าไม่ตรงหรือไม่มีเลย แปลว่าโค้ดใน Apps Script ยังเป็นของเก่า (ไฟล์ใน repo ไม่ได้รันเอง ต้อง
@@ -1416,7 +1476,11 @@ async function postToRelay(payload, label){
   }
   const body = JSON.stringify(Object.assign({ at: nowIso(), appVersion: APP_VERSION }, payload));
   try{
-    const res = await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body });
+    // keepalive: บอกเบราว์เซอร์ให้ส่งคำขอนี้ต่อจนจบ ถึงหน้าเว็บจะถูกปิดหรือสลับออกไปแอปอื่นกลางคัน
+    // เบราว์เซอร์ในแอป LINE บนมือถือ "พัก" หน้าที่ไม่ได้อยู่บนจอ คำขอที่ยังค้างอยู่จะถูกทิ้งทั้งดุ้น
+    // = กดปุ่มแล้วสลับแอปทันที แจ้งเตือนหายไปเงียบๆ ทั้งที่ใบเปลี่ยนสถานะไปแล้ว
+    // (payload ของ relay เป็นข้อความสั้นๆ ไม่ชนเพดาน 64KB ของ keepalive — ต่างจากคีย์ orders)
+    const res = await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body, keepalive:true });
     const text = await res.text();
     let data = null;
     try{ data = JSON.parse(text); }catch(e){ /* relay ตอบมาไม่ใช่ JSON */ }
@@ -1521,9 +1585,37 @@ async function saveNotifications(mutate){
   if(ok) state.notifications = next;
   return ok;
 }
+/* ===== รวมการเขียนคีย์ 'notifications' ของการกดปุ่มครั้งเดียวให้เหลือรอบเดียว =====
+   การกดหนึ่งครั้งต้องแจ้งหลายคนเสมอ (ผจก.ทั่วไปอนุมัติ = ผจก.แผนกซ่อมบำรุง + ผู้แจ้งซ่อม,
+   อัปเดตความคืบหน้า = ผู้แจ้งซ่อม + ผจก.แผนกซ่อมบำรุง + ช่างทุกคนในใบ) เดิมแต่ละคนกิน
+   storeGet + storeSet ของตัวเอง แล้วยังต้องรอ LINE ต่อท้ายอีก ก่อนจะเริ่ม "คนถัดไป"
+   รวมแล้วสิบถึงสามสิบวินาทีโดยหน้าจอไม่ขยับเลยสักนิด — ระหว่างนั้นถ้าผู้ใช้สลับออกจากแอป
+   (ปกติมากบนเบราว์เซอร์ในแอป LINE เพราะดูเหมือนกดแล้วไม่มีอะไรเกิดขึ้น) คำขอที่ยังไม่ได้ยิง
+   จะหายไปทั้งหมด = อาการ "คนแรกได้รับแจ้งเตือน คนที่สองเป็นต้นไปไม่ได้รับ" ที่เจอจริงหน้างาน */
+let notifWriteQueue = [], notifWritePromise = null;
+function queueNotification(n){
+  pendingNotifs.set(n.id, { n, at: Date.now() });   // เวลาเก็บไว้นอกตัวแจ้งเตือน ไม่ให้ปนลงชีต
+  state.notifications.unshift(n);   // ขึ้นกระดิ่งของคนที่กดปุ่มทันที ไม่ต้องรอเซิร์ฟเวอร์
+  notifWriteQueue.push(n);
+  if(notifWritePromise) return notifWritePromise;
+  // หน่วงหนึ่งจังหวะให้การแจ้งเตือนที่ยิงพร้อมกันในการกดครั้งเดียวกันเข้าคิวมาครบก่อน แล้วเขียนทีเดียว
+  // (เคลียร์ notifWritePromise ตั้งแต่ก่อนเริ่มเขียน — ตัวที่เข้าคิวมาระหว่างเขียนต้องได้รอบใหม่ของตัวเอง)
+  notifWritePromise = new Promise(r => setTimeout(r, 0)).then(() => {
+    const batch = notifWriteQueue;
+    notifWriteQueue = []; notifWritePromise = null;
+    return saveNotifications(list => {
+      batch.forEach(row => { if(!list.some(x => x && x.id === row.id)) list.unshift(row); });
+      return list;
+    });
+  });
+  return notifWritePromise;
+}
 /* แจ้งเตือน "ทั้งบทบาท" — ใช้กับ fm / gm / maint เท่านั้น (ทุกคนในบทบาทนั้นต้องเห็นงานที่รอตัวเอง)
    opts.lineText = ข้อความที่จะส่งเข้า LINE ถ้าต้องการรูปแบบอื่นนอกจากค่าเริ่มต้น (ใช้กับช่าง
-   ซึ่งข้อความต้องมีรายละเอียดเครื่องจักร/กำหนดงานมากกว่าที่โชว์บนกระดิ่ง) */
+   ซึ่งข้อความต้องมีรายละเอียดเครื่องจักร/กำหนดงานมากกว่าที่โชว์บนกระดิ่ง)
+
+   ลำดับสำคัญ: ยิง LINE กับเขียนแจ้งเตือนในแอป "พร้อมกัน" ไม่ใช่ต่อคิวกัน — LINE คือสิ่งที่ผู้ใช้
+   รอจริง ส่วนการเขียนคีย์ notifications เป็นงานเบื้องหลัง ไม่มีเหตุผลให้มันหน่วง LINE ไว้ */
 async function pushNotification(toRole, orderId, docNumber, message, target, opts){
   const o = opts || {};
   const n = { id: uid(), toRole, orderId, docNumber, message, createdAt: nowIso(), read:false };
@@ -1533,28 +1625,23 @@ async function pushNotification(toRole, orderId, docNumber, message, target, opt
     n.toDidHash = target.didHash || '';
     n.toName = target.name || '';
   }
-  pendingNotifs.set(n.id, { n, at: Date.now() });   // เวลาเก็บไว้นอกตัวแจ้งเตือน ไม่ให้ปนลงชีต
-  state.notifications.unshift(n);   // ขึ้นกระดิ่งของคนที่กดปุ่มทันที ไม่ต้องรอเซิร์ฟเวอร์
-  const saved = await saveNotifications(list => {
-    if(!list.some(x => x && x.id === n.id)) list.unshift(n);
-    return list;
-  });
-  if(!saved) toast('บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ — ระบบจะลองใหม่ให้เองในรอบถัดไป', true);
   const text = o.lineText || `[${docNumber}] ${message}\n${orderDeepLink(orderId, toRole)}`;
   const label = o.label || `${docNumber} → ${toRole}` + (target && target.name ? ` (${target.name})` : '');
-  let res;
+  let linePromise;
   if(target && o.optionalLine && !(target.userIds || []).length && !target.fallbackRole){
     // ตั้งใจไม่ยิง (ดู notifyTech) — บันทึกไว้ในบันทึกการส่งว่า "ข้าม" ให้ต่างจาก "ส่งไม่ออก" ชัดเจน
     logLineSend({ label, skipped:true, ok:true, sent:0, wanted:0,
       note:(target.name || 'ผู้รับ') + ' ยังไม่ได้ผูก LINE — ไม่ได้ส่ง (คู่งานที่มี LINE ในใบเดียวกันเป็นคนรับแทน)' });
-    res = { ok:true, sent:0 };
+    linePromise = Promise.resolve({ ok:true, sent:0 });
   } else {
-    res = target
-      ? await sendLineToUserIds(target.userIds, text, {
+    linePromise = target
+      ? sendLineToUserIds(target.userIds, text, {
           fallbackRole: target.fallbackRole || '', targetName: target.name || '', label
         })
-      : await tryLineWebhook(toRole, text);
+      : tryLineWebhook(toRole, text);
   }
+  const [res, saved] = await Promise.all([linePromise, queueNotification(n)]);
+  if(!saved) toast('บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ — ระบบจะลองใหม่ให้เองในรอบถัดไป', true);
   // ok === false เท่านั้นที่แปลว่า "ไม่ถึงใครเลยแน่ๆ" (null = ส่งแล้วแต่อ่านผลไม่ได้ ไม่ใช่ความล้มเหลว)
   // บอกคนที่กดปุ่มไปเลยว่าแจ้งเตือนในแอปบันทึกแล้วแต่ LINE ไม่ออก จะได้ไม่เข้าใจผิดว่าส่งไปแล้ว
   if(res && res.ok === false) toast('บันทึกแล้ว แต่ส่ง LINE ไม่ออก — ดูสาเหตุที่หน้าตั้งค่า > บันทึกการส่ง LINE', true);
@@ -1562,6 +1649,11 @@ async function pushNotification(toRole, orderId, docNumber, message, target, opt
 }
 /* แจ้งเตือนผู้แจ้งซ่อม "ของใบนี้" คนเดียว — หาคนไม่เจอก็ไม่ส่ง ดีกว่าส่งหาผู้แจ้งซ่อมทุกคน */
 async function notifyOrderRequester(o, message){
+  // ต้องรอข้อมูลผู้รับให้พร้อม "ก่อน" ค้นหา LINE ของผู้แจ้ง — เดิมค้นหาก่อนแล้วค่อยไปรอข้างใน
+  // sendLineToUserIds() ผลคือคนที่เปิดแอปจากลิงก์แล้วกดปุ่มทันที (เร็วกว่าข้อมูลจะโหลดมาถึง)
+  // จะหาเจ้าของใบไม่เจอ แล้วตกไปใช้แถวตามบทบาทในชีตแทน = ถึงคนอื่นแทนเจ้าของใบ
+  // หรือไม่ถึงใครเลยถ้าไม่มีแถว requester ในชีต
+  await ensureNotifyRoutingReady();
   const userIds = orderRequesterLineIds(o);
   // ไม่มี LINE ผูกไว้ = ตกไปใช้แถว requester ในชีตผู้รับ (ดู fallbackRole ด้านล่าง) ซึ่งอาจถึงหลายคน
   // ทางที่ถูกต้องกว่าคือ admin ผูก LINE ให้คนนั้นในหน้าคำขอสิทธิ์ แล้วใบต่อๆ ไปจะถึงเจ้าตัวคนเดียว
@@ -1592,6 +1684,10 @@ async function notifyOrderRequester(o, message){
    ทำให้คนที่กดปุ่มโดน toast "ส่ง LINE ไม่ออก" ทุกครั้งทั้งที่เป็นพฤติกรรมที่ตั้งใจ
    (ถ้าวันหลังผูก LINE ให้เขาแล้ว lineIdsForPerson() จะหาเจอเองทันที ไม่ต้องแก้โค้ดตรงนี้) */
 async function notifyTech(o, techName, message, lineText){
+  // เหตุผลเดียวกับ notifyOrderRequester — และที่นี่ร้ายแรงกว่า เพราะ optionalLine ด้านล่างแปล
+  // "ไม่พบ userId" ว่าเป็นการข้ามโดยตั้งใจ ช่างที่ผูก LINE ไว้แล้วจึงถูกข้ามเงียบๆ พร้อมบันทึก
+  // เหตุผลที่ผิดความจริงว่า "ยังไม่ได้ผูก LINE" ทั้งที่แค่ข้อมูลผู้รับยังโหลดมาไม่ทัน
+  await ensureNotifyRoutingReady();
   const userIds = lineIdsForPerson({ techName });
   return await pushNotification('tech', o.id, o.docNumber, message, {
     userIds, name: techName,
@@ -2210,9 +2306,12 @@ async function approveFm(id, note){
   o.status = 'PENDING_GM';
   o.statusHistory.push({ status:'PENDING_GM', at: nowIso(), note:'ผู้จัดการโรงงานอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
   await persistOrders();
-  await pushNotification('gm', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอการอนุมัติของท่าน`);
   // ผู้แจ้งซ่อมต้องรู้ความคืบหน้าของใบตัวเองทุกขั้น ไม่ใช่รู้เฉพาะตอนถูกปฏิเสธ
-  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอผู้จัดการทั่วไปอนุมัติ`);
+  // ยิงทั้งสองคนพร้อมกัน — ไล่ทีละคนคือต้นเหตุที่คนหลังๆ ไม่ได้รับ (ดูหมายเหตุที่ queueNotification)
+  await Promise.all([
+    pushNotification('gm', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอการอนุมัติของท่าน`),
+    notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการโรงงานแล้ว รอผู้จัดการทั่วไปอนุมัติ`),
+  ]);
   toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการทั่วไป');
   closeActionBox();
 }
@@ -2244,8 +2343,10 @@ async function approveGm(id, note){
   o.status = 'PENDING_ASSIGN';
   o.statusHistory.push({ status:'PENDING_ASSIGN', at: nowIso(), note:'ผู้จัดการทั่วไปอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
   await persistOrders();
-  await pushNotification('maint', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติครบแล้ว กรุณามอบหมายช่างผู้รับผิดชอบ`);
-  await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการทั่วไปแล้ว รอผู้จัดการแผนกซ่อมบำรุงมอบหมายช่าง`);
+  await Promise.all([
+    pushNotification('maint', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติครบแล้ว กรุณามอบหมายช่างผู้รับผิดชอบ`),
+    notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการทั่วไปแล้ว รอผู้จัดการแผนกซ่อมบำรุงมอบหมายช่าง`),
+  ]);
   toast('อนุมัติแล้ว ส่งต่อให้ผู้จัดการแผนกซ่อมบำรุง');
   closeActionBox();
 }
@@ -2308,12 +2409,12 @@ async function assignTechnician(id){
   o.status = 'ASSIGNED';
   o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:`รับใบแจ้งซ่อมโดย ${receivedBy} — มอบหมายงานให้ ${techs.join(', ')} (กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}) — การดำเนินงาน: ${EXECUTION_PLAN_META[executionPlan]}` });
   await persistOrders();
-  await notifyOrderRequester(o, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`);
-  for(const tech of techs){
-    await notifyTech(o, tech,
+  await Promise.all([
+    notifyOrderRequester(o, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`),
+    ...techs.map(tech => notifyTech(o, tech,
       `คุณได้รับมอบหมายงานซ่อม (${o.machineCode} — ${o.machineName}) กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}`,
-      `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`);
-  }
+      `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${o.machineCode} — ${o.machineName}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(startDate)} - ${fmtDate(endDate)}\n${orderDeepLink(o.id, 'tech')}`)),
+  ]);
   state.ui.assignTechs = [''];
   state.ui.assignStartDate = '';
   state.ui.assignEndDate = '';
@@ -2571,13 +2672,13 @@ async function notifyOpinionStep(o, step, date, note, isEdit){
       techHint = hint;
     }
   }
-  await notifyOrderRequester(o, head + body + hint);
-  await pushNotification('maint', o.id, o.docNumber, head + body + hint);
-  for(const tech of assignedTechs(o)){
-    await notifyTech(o, tech, head + body + techHint,
+  await Promise.all([
+    notifyOrderRequester(o, head + body + hint),
+    pushNotification('maint', o.id, o.docNumber, head + body + hint),
+    ...assignedTechs(o).map(tech => notifyTech(o, tech, head + body + techHint,
       '[' + o.docNumber + '] ' + head + body + techHint
-      + '\nเครื่องจักร: ' + o.machineCode + ' — ' + o.machineName + '\n' + orderDeepLink(o.id, 'tech'));
-  }
+      + '\nเครื่องจักร: ' + o.machineCode + ' — ' + o.machineName + '\n' + orderDeepLink(o.id, 'tech'))),
+  ]);
 }
 async function startRepair(id){
   const o = getOrder(id); if(!o) return;
@@ -2594,8 +2695,10 @@ async function finishRepair(id){
   o.status = 'PENDING_VERIFY';
   o.statusHistory.push({ status:'PENDING_VERIFY', at: nowIso(), note:'ซ่อมเสร็จสิ้น รอผู้แจ้งซ่อมตรวจสอบการใช้งาน' });
   await persistOrders();
-  await notifyOrderRequester(o, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`);
-  await pushNotification('maint', id, o.docNumber, `ช่างแจ้งซ่อมเสร็จแล้ว (${assignedTechs(o).join(', ') || 'ไม่ระบุช่าง'}) รอผู้แจ้งซ่อมตรวจรับ`);
+  await Promise.all([
+    notifyOrderRequester(o, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`),
+    pushNotification('maint', id, o.docNumber, `ช่างแจ้งซ่อมเสร็จแล้ว (${assignedTechs(o).join(', ') || 'ไม่ระบุช่าง'}) รอผู้แจ้งซ่อมตรวจรับ`),
+  ]);
   toast('อัปเดตสถานะ: รอผู้แจ้งตรวจสอบผลการซ่อม');
   render();
 }
@@ -2609,12 +2712,12 @@ async function verifyRepair(id, type, note){
     o.verification = { result:'pass', by:o.requestedBy, at: nowIso(), note:n };
     o.statusHistory.push({ status:'DONE', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ผ่าน ใช้งานได้ปกติ' + (n ? ' — หมายเหตุ: ' + n : '') });
     await persistOrders();
-    await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`);
-    for(const tech of assignedTechs(o)){
-      await notifyTech(o, tech,
+    await Promise.all([
+      pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`),
+      ...assignedTechs(o).map(tech => notifyTech(o, tech,
         `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย${n ? ' — หมายเหตุจากผู้แจ้ง: ' + n : ''}`,
-        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`);
-    }
+        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมของคุณผ่าน ปิดงานเรียบร้อย ขอบคุณสำหรับการซ่อม${n ? '\nหมายเหตุจากผู้แจ้ง: ' + n : ''}\n${orderDeepLink(o.id, 'tech')}`)),
+    ]);
     toast('ยืนยันผลการซ่อมเรียบร้อย ปิดงาน');
   } else {
     if(!n){ toast('กรุณาระบุสาเหตุที่ต้องซ่อมเพิ่มเติม', true); return; }
@@ -2624,12 +2727,12 @@ async function verifyRepair(id, type, note){
     o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ' + n });
     await persistOrders();
     const techs = assignedTechs(o);
-    await pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`);
-    for(const tech of techs){
-      await notifyTech(o, tech,
+    await Promise.all([
+      pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`),
+      ...techs.map(tech => notifyTech(o, tech,
         `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม — สาเหตุ: ${n}`,
-        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`);
-    }
+        `[${o.docNumber}] ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมไม่ผ่าน ต้องดำเนินการซ่อมเพิ่มเติม\nสาเหตุ: ${n}\n${orderDeepLink(o.id, 'tech')}`)),
+    ]);
     toast('ส่งกลับเพื่อซ่อมเพิ่มเติมแล้ว');
   }
   closeActionBox();
@@ -3569,9 +3672,13 @@ function renderSettings(){
   }).join('');
   const log = state.lineSendLog || [];
   const sendLogBox = !log.length
-    ? `<p class="desc">ยังไม่มีการส่งในรอบนี้</p>`
+    ? `<p class="desc">ยังไม่มีอะไรให้แสดง — รายการนี้เก็บการส่งของรอบนี้ทั้งหมด รวมกับ "การส่งที่ไม่สำเร็จ" ของทุกเครื่องที่ค้างไว้บนเซิร์ฟเวอร์</p>`
     : `<table class="mini"><tr><th>เวลา</th><th>รายการ</th><th>ผล</th></tr>${log.map(e => {
-        const t = new Date(e.at).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        // แถวที่ดึงมาจากเซิร์ฟเวอร์อาจเป็นของเมื่อวาน/สัปดาห์ก่อน — โชว์วันที่กำกับด้วยเมื่อไม่ใช่ของวันนี้
+        const d = new Date(e.at);
+        const sameDay = d.toDateString() === new Date().toDateString();
+        const t = (sameDay ? '' : d.toLocaleDateString('th-TH', { day:'2-digit', month:'2-digit' }) + ' ')
+          + d.toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
         const mark = e.skipped ? '⏭️ ข้าม (ตั้งใจ)'
           : e.ok === true ? `✅ ส่ง ${e.sent} ข้อความ` : (e.ok === null ? '⚠️ ไม่ทราบผล' : '❌ ไม่ถึงใคร');
         // ตัวเลขทีละขั้น: แอปหาผู้รับได้กี่คน → relay หาได้กี่คน → LINE รับไปกี่ข้อความ
@@ -3581,7 +3688,8 @@ function renderSettings(){
         const errs = (e.errors || []).length
           ? `<br><span style="color:var(--danger); font-size:11.5px;">${e.errors.map(x => `${escapeHtml(x.userId || '')} → HTTP ${escapeHtml(String(x.code || '-'))} ${escapeHtml(x.message || '')}`).join('<br>')}</span>` : '';
         const raw = e.raw ? `<br><span class="mono" style="color:var(--slate-light); font-size:11px; word-break:break-all;">${escapeHtml(e.raw)}</span>` : '';
-        return `<tr><td class="mono">${t}</td><td>${escapeHtml(e.label || '-')}</td><td>${mark}${e.note ? `<br><span style="color:var(--slate); font-size:11.5px;">${escapeHtml(e.note)}</span>` : ''}${chain}${errs}${raw}</td></tr>`;
+        const who = e.by ? `<br><span style="color:var(--slate-light); font-size:11.5px;">ยิงจากเครื่องของ ${escapeHtml(e.by)}</span>` : '';
+        return `<tr><td class="mono">${t}</td><td>${escapeHtml(e.label || '-')}${who}</td><td>${mark}${e.note ? `<br><span style="color:var(--slate); font-size:11.5px;">${escapeHtml(e.note)}</span>` : ''}${chain}${errs}${raw}</td></tr>`;
       }).join('')}</table>`;
   const lt = state.ui.lineTest;
   const lineTestBox = !lt ? '' : (lt.running ? `<div class="auth-note">กำลังทดสอบ relay...</div>` : `
@@ -3651,7 +3759,7 @@ function renderSettings(){
     <table class="mini"><tr><th>บทบาท</th><th>จำนวนผู้รับ</th></tr>${recipientRows}</table>
 
     <h3 style="margin-top:20px;">บันทึกการส่ง LINE ล่าสุด</h3>
-    <p class="desc">เก็บเฉพาะในเครื่องนี้และเฉพาะรอบที่เปิดแอปอยู่ — ใช้ดูว่าที่กดไปเมื่อครู่ ข้อความออกไปถึงกี่คน</p>
+    <p class="desc">การส่งของ "รอบนี้บนเครื่องนี้" ทุกครั้ง (ดูว่าที่กดไปเมื่อครู่ ข้อความถึงกี่คน) รวมกับ "การส่งที่ไม่สำเร็จ" ของทุกเครื่องซึ่งเก็บค้างไว้บนเซิร์ฟเวอร์ ${SEND_LOG_KEEP} รายการล่าสุด — ย้อนดูได้แม้คนที่กดปุ่มจะปิดแอปไปแล้ว</p>
     ${sendLogBox}
   </div>
 
