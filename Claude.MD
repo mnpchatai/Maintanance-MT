@@ -195,6 +195,46 @@ Known trap: an `onfocus` handler that unconditionally calls `render()`
 creates infinite recursion once focus-restore calls `.focus()` on it
 (this happened with the machine-search box — fixed by only calling
 `render()` from `onfocus` when the dropdown isn't already showing).
+Sending state — every write goes through `submitting()`. Every request
+this app makes is one Apps Script execution running as the script owner for
+all users at once, so a write can sit in that queue for seconds. Before, the
+screen went completely still while it did, users assumed the tap missed and
+tapped again, and the result was duplicate work orders and duplicate
+approvals; the only confirmation afterwards was a small toast at the bottom
+that vanished in 2.6s.
+Every button that writes back to the server is therefore wrapped once, in
+the `SUBMIT_LABELS` table next to `toast()`, which replaces each named global
+with `submitting(name, label, fn)`. That gives, in order: a full-screen
+`#submitOverlay` card ("กำลังส่ง...") that makes a second tap physically
+impossible — it does not rely on one button's `disabled`, because `render()`
+rebuilds every button on every change; the tapped button itself turned into
+"กำลัง..." with a spinner via `submitAttr()`/`submitText()`; a `✓
+ส่งข้อมูลเรียบร้อย` card held for `SUBMIT_DONE_MS` (tap to dismiss); and a
+re-entrancy guard that turns a second tap into a toast instead of a second
+request. `pollForUpdates()` also skips its round while a write is in flight,
+so a stale read cannot land on top of what the user just did.
+Adding a new write button means adding its function name to `SUBMIT_LABELS`
+and rendering it with `${submitAttr()}` + `${submitText(...)}`. Never add an
+inner function that a wrapped one calls on (e.g. `approveFm`, which
+`confirmAction` dispatches to) — wrapping both makes the inner call trip the
+outer's own guard.
+The `✓` card is driven by the success `toast()` the handler emits: while a
+submit is in flight, a non-error toast is captured as the card's message
+instead of being shown at the bottom, and error toasts still appear
+immediately. So a handler that cannot verify its write **must** end with
+`toast(..., true)` and `return` — otherwise the app announces success for
+data that never arrived. `persistOrderChange(undo, errMsg)` is the helper
+for that on order writes: it persists, and on failure rolls the in-memory
+mutation back, toasts the error and returns `false` (callers return at
+once). Use `toastPlain()` for a non-error message that is *not* the result
+of a write ("ไม่มีการเปลี่ยนแปลง"), so it does not become a false `✓`.
+`submitting()` opens the overlay from a `setTimeout(0)`, not synchronously,
+and that is load-bearing twice over: a handler that fails validation returns
+before its first `await`, finishing in a microtask that always precedes the
+timer, so the overlay never flashes; and a handler that calls `confirm()`
+blocks the thread, so the timer cannot fire behind the browser's own dialog
+and does not fire at all if the user cancels.
+
 Photo attachments — two buttons, never one. The attach UI used to be a
 single `<input type="file" accept="image/*" multiple>` behind a label. On
 iOS that is fine: Safari answers it with an action sheet offering

@@ -305,7 +305,41 @@
     border-radius:8px; padding:10px 12px; margin:10px 0; font-size:12.5px; line-height:1.75; color:#7a5510;}
   .auth-warn b, .auth-note b{color:inherit;}
 
-  .toast-wrap{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; gap:8px; align-items:center;}
+  /* กล่องสถานะ "กำลังส่งข้อมูล / ส่งข้อมูลเรียบร้อย" — คลุมทั้งจอระหว่างที่คำขอยังไม่จบ
+     คลุมทั้งจอโดยตั้งใจ เพราะหน้าที่หลักคือ "กันกดซ้ำ" ไม่ใช่แค่บอกว่ากำลังทำงาน */
+  .submit-overlay{
+    display:none; position:fixed; inset:0; z-index:9600; padding:20px;
+    align-items:center; justify-content:center; background:rgba(31,44,59,.5);
+  }
+  .submit-overlay.open{display:flex;}
+  .submit-card{
+    background:#fff; border-radius:12px; padding:26px 30px; text-align:center;
+    min-width:min(260px, 86vw); max-width:min(420px, 92vw);
+    box-shadow:0 14px 40px rgba(0,0,0,.28); animation:submit-pop .16s ease-out;
+  }
+  @keyframes submit-pop{from{opacity:0; transform:scale(.94);} to{opacity:1; transform:scale(1);}}
+  .submit-spinner{
+    width:42px; height:42px; margin:0 auto 14px; border-radius:50%;
+    border:4px solid #ece4d2; border-top-color:var(--amber); animation:submit-spin .8s linear infinite;
+  }
+  @keyframes submit-spin{to{transform:rotate(360deg);}}
+  .submit-check{
+    width:48px; height:48px; margin:0 auto 12px; border-radius:50%;
+    background:var(--success-bg); color:var(--success); font-size:27px; line-height:48px; font-weight:700;
+  }
+  .submit-title{font-weight:700; font-size:16.5px; color:var(--navy);}
+  .submit-msg{font-size:13.5px; color:var(--slate); margin-top:7px; line-height:1.45;}
+  .submit-hint{font-size:11.5px; color:var(--slate-light); margin-top:12px;}
+  /* สปินเนอร์เล็กในปุ่มที่ถูกกด — บอกว่า "ปุ่มนี้แหละที่กำลังทำงานอยู่" */
+  .btn-spin{
+    display:inline-block; width:13px; height:13px; border-radius:50%;
+    border:2px solid currentColor; border-top-color:transparent; animation:submit-spin .7s linear infinite;
+  }
+  .btn:disabled{cursor:not-allowed;}
+  .btn-outline:disabled, .btn-success:disabled, .btn-danger-outline:disabled{opacity:.55;}
+  table.mini td .del:disabled{color:var(--slate-light); cursor:not-allowed;}
+
+  .toast-wrap{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:9800; display:flex; flex-direction:column; gap:8px; align-items:center;}
   .toast{background:var(--navy); color:#fff; padding:11px 20px; border-radius:8px; font-size:13.5px; box-shadow:0 6px 20px rgba(0,0,0,.2); animation:toastin .18s ease-out;}
   .toast.err{background:var(--danger);}
   @keyframes toastin{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
@@ -357,6 +391,7 @@
 <body>
 <div id="app">กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…</div>
 <div class="toast-wrap" id="toastWrap"></div>
+<div class="submit-overlay" id="submitOverlay" role="status" aria-live="assertive"></div>
 <div class="cam-overlay" id="camOverlay">
   <div class="cam-hint">กล้องในแอป — จัดภาพให้ชัดแล้วกดปุ่มขาวเพื่อถ่าย</div>
   <video id="camVideo" playsinline autoplay muted></video>
@@ -513,8 +548,8 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
-    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', reqSending:false, deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], resubmitAttached:null, assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+    reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
     newLineUserId:'', newLineUserName:'',
@@ -537,7 +572,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-08.1';
+const APP_VERSION = '2026-09-08.2';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -976,13 +1011,11 @@ async function submitAccessRequest(){
     roles: [], techName: '', status: 'pending',
     at: nowIso(), decidedAt: '', decidedBy: '',
   };
-  u.reqSending = true; render();
   const ok = await saveAccessRequests(list => {
     const idx = list.findIndex(r => r.didHash === state.didHash);
     if(idx >= 0) list[idx] = entry; else list.push(entry);
     return list;
   });
-  u.reqSending = false;
   if(!ok){ toast('ส่งคำขอไม่สำเร็จ กรุณาลองใหม่', true); render(); return; }
   state.myRequest = entry;
   state.authStatus = 'pending';
@@ -1267,7 +1300,102 @@ function previewDocNumber(deptCode){
 function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+/* ============================= สถานะ "กำลังส่งข้อมูล / ส่งข้อมูลเรียบร้อย" =============================
+   ปัญหาเดิม: กดปุ่มส่งแล้วหน้าจอนิ่งสนิท เพราะทุกคำขอวิ่งไปที่ Apps Script ที่เข้าคิวรวมกันทั้งระบบ
+   บางจังหวะใช้เวลาหลายวินาที ผู้ใช้จึงเข้าใจว่า "กดไม่ติด" แล้วกดซ้ำ กลายเป็นใบแจ้งซ่อมซ้ำ/อนุมัติซ้ำ
+   และตอนส่งเสร็จก็มีแค่ป้ายเล็กมุมล่างที่หายไปใน 2.6 วิ ซึ่งพลาดได้ง่ายมากบนมือถือ
+
+   กติกาที่ต้องรักษาไว้ — ปุ่มไหนที่ "เขียนข้อมูลกลับเซิร์ฟเวอร์" ต้องผ่าน submitting() ทั้งหมด:
+   1) ระหว่างทำงาน คลุมทั้งจอด้วยกล่อง "กำลังส่งข้อมูล..." กดอะไรไม่ได้เลย จึงกดซ้ำไม่ได้โดยโครงสร้าง
+      ไม่ได้พึ่งแค่ disabled ของปุ่มใดปุ่มหนึ่ง เพราะ render() วาดปุ่มใหม่ทั้งหน้าอยู่ตลอดเวลา
+   2) ปุ่มที่กดเปลี่ยนเป็นข้อความ "กำลัง..." พร้อมสปินเนอร์ และปุ่มส่งอื่นๆ ถูกปิดไว้ (submitAttr/submitText)
+   3) เสร็จแล้วขึ้นกล่อง ✓ "ส่งข้อมูลเรียบร้อย" ค้างให้อ่านสักครู่ (แตะที่ใดก็ได้เพื่อปิดก่อนเวลา)
+   4) กล่อง ✓ จะขึ้นก็ต่อเมื่อฟังก์ชันนั้น toast ข้อความสำเร็จออกมาจริงเท่านั้น เขียนไม่สำเร็จต้อง
+      toast(..., true) แล้ว return — ห้ามมีทางไหนที่โชว์ "เรียบร้อย" ทั้งที่ข้อมูลไม่เข้าเซิร์ฟเวอร์ */
+let submitFlight = null;      // { key, okMsg } — ไม่ null เมื่อมีการส่งข้อมูลค้างอยู่หนึ่งงาน
+const SUBMIT_DONE_MS = 1500;  // เวลาที่กล่อง "ส่งข้อมูลเรียบร้อย" ค้างอยู่ก่อนปิดเอง
+
+function showSubmitSending(label){
+  const ov = document.getElementById('submitOverlay'); if(!ov) return;
+  ov.innerHTML = `<div class="submit-card">
+    <div class="submit-spinner"></div>
+    <div class="submit-title">${escapeHtml(label || 'กำลังส่งข้อมูล...')}</div>
+    <div class="submit-msg">กำลังบันทึกขึ้นเซิร์ฟเวอร์ กรุณารอสักครู่ — ไม่ต้องกดซ้ำ</div>
+  </div>`;
+  ov.classList.add('open');
+}
+/* คืน Promise ที่ resolve เมื่อครบเวลา หรือเมื่อผู้ใช้แตะเพื่อปิด อันไหนถึงก่อนก็ได้ */
+function showSubmitDone(msg){
+  const ov = document.getElementById('submitOverlay'); if(!ov) return Promise.resolve();
+  ov.innerHTML = `<div class="submit-card">
+    <div class="submit-check">✓</div>
+    <div class="submit-title">ส่งข้อมูลเรียบร้อย</div>
+    <div class="submit-msg">${escapeHtml(msg || '')}</div>
+    <div class="submit-hint">แตะที่ใดก็ได้เพื่อปิด</div>
+  </div>`;
+  ov.classList.add('open');
+  return new Promise(resolve => {
+    let closed = false;
+    const finish = () => { if(closed) return; closed = true; clearTimeout(timer); ov.onclick = null; resolve(); };
+    const timer = setTimeout(finish, SUBMIT_DONE_MS);
+    ov.onclick = finish;
+  });
+}
+function hideSubmitOverlay(){
+  const ov = document.getElementById('submitOverlay'); if(!ov) return;
+  ov.classList.remove('open'); ov.onclick = null; ov.innerHTML = '';
+}
+/* ห่อ "หนึ่งการกดปุ่มที่ส่งข้อมูล" ตามกติกาข้างบน
+   กล่องคลุมจอถูกเปิดใน setTimeout(0) ไม่ใช่เปิดทันที ด้วยเหตุผลสองข้อที่ต้องคงไว้:
+   - ฟังก์ชันที่ตรวจฟอร์มไม่ผ่านจะ return ตั้งแต่ยังไม่มี await เลย งานนั้นจึงจบใน microtask
+     ซึ่งเกิดก่อน timer เสมอ กล่องจะไม่กะพริบขึ้นมาแล้วหายไปให้สับสน
+   - ฟังก์ชันที่ถาม confirm() ก่อน จะบล็อกเธรดไว้จน timer ทำงานไม่ได้ กล่อง "กำลังส่งข้อมูล"
+     จึงไม่ค้างอยู่หลังกล่องยืนยันของเบราว์เซอร์ และไม่ขึ้นเลยถ้าผู้ใช้กดยกเลิก */
+async function submitting(key, label, fn){
+  if(submitFlight){
+    // กดซ้ำระหว่างที่ของเดิมยังไม่จบ — ไม่ยิงคำขอใหม่ แค่ย้ำว่ากำลังทำอยู่
+    toast('กำลังส่งข้อมูลอยู่ กรุณารอให้เสร็จก่อน', true);
+    return;
+  }
+  const flight = { key, okMsg: null };
+  submitFlight = flight;
+  render();
+  const showTimer = setTimeout(() => { if(submitFlight === flight) showSubmitSending(label); }, 0);
+  try{
+    await fn();
+  }catch(err){
+    console.error('submit failed:', key, err);
+    flight.okMsg = null;   // มีข้อยกเว้นกลางทาง = ไม่ถือว่าสำเร็จ ห้ามขึ้นกล่อง ✓
+    submitFlight = null;
+    toast('เกิดข้อผิดพลาดระหว่างส่งข้อมูล กรุณาลองใหม่อีกครั้ง', true);
+  }finally{
+    clearTimeout(showTimer);
+    submitFlight = null;
+  }
+  render();
+  if(flight.okMsg) await showSubmitDone(flight.okMsg);
+  hideSubmitOverlay();
+}
+/* ใช้คู่กันบนปุ่มส่งข้อมูลทุกปุ่ม:
+   <button ... onclick="saveWebhook()" ${submitAttr()}>${submitText('saveWebhook','บันทึก','กำลังบันทึก...')}</button>
+   submitAttr() ปิดปุ่มส่ง "ทุกปุ่ม" ระหว่างมีงานค้าง ไม่ใช่เฉพาะปุ่มที่กด เพราะกดปุ่มอื่นต่อทันที
+   ระหว่างที่ orders ยังเขียนไม่เสร็จ คือทางที่ข้อมูลเขียนทับกันเองได้ */
+function submitAttr(){ return submitFlight ? 'disabled' : ''; }
+function submitText(key, idle, busy){
+  return (submitFlight && submitFlight.key === key)
+    ? `<span class="btn-spin"></span>${escapeHtml(busy)}`
+    : idle;
+}
 function toast(msg, isErr){
+  /* ระหว่างที่ submitting() ทำงานอยู่ ข้อความ "สำเร็จ" คือผลลัพธ์ของการกดปุ่มครั้งนั้นเอง จึงเก็บไว้
+     ไปขึ้นบนกล่อง ✓ กลางจอแทน (เห็นชัดกว่าป้ายเล็กมุมล่างที่หายไปใน 2.6 วิ มาก)
+     ส่วนข้อความ error ยังเด้งทันทีเหมือนเดิม เพราะบางอันเป็นคำเตือนระหว่างทางที่ต้องเห็นคู่กับ
+     ผลลัพธ์สุดท้าย (เช่น "ใบถูกบันทึกแล้ว แต่รูปแนบไม่สำเร็จ")
+     ข้อความที่ไม่ใช่ผลของการส่งข้อมูลจริงให้ใช้ toastPlain() เพื่อไม่ให้ถูกจับไปขึ้นกล่อง ✓ */
+  if(submitFlight && !isErr){ submitFlight.okMsg = msg; return; }
+  toastPlain(msg, isErr);
+}
+function toastPlain(msg, isErr){
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
   el.className = 'toast' + (isErr ? ' err':'');
@@ -1275,6 +1403,39 @@ function toast(msg, isErr){
   wrap.appendChild(el);
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 2600);
 }
+/* ปุ่มทั้งหมดที่เขียนข้อมูลกลับเซิร์ฟเวอร์ — ห่อด้วย submitting() ที่เดียวตรงนี้ จะได้ไม่มีปุ่มไหน
+   หลุดกติกากันกดซ้ำ และเพิ่มปุ่มใหม่ทีหลังก็แค่มาต่อรายการนี้ (คีย์ = ชื่อฟังก์ชัน ใช้กับ submitText)
+   ทำได้ตรงนี้เพราะ function declaration ระดับบนสุดถูกผูกไว้กับ globalThis ตั้งแต่ก่อนโค้ดเริ่มรัน
+   ทั้งชื่อที่เรียกใน onclick และที่เรียกในโค้ดจึงชี้มาที่ตัวที่ห่อแล้วเหมือนกัน
+   ห้ามใส่ฟังก์ชันชั้นในที่ถูกเรียกต่อจากตัวที่ห่อไว้แล้ว (เช่น approveFm ที่ confirmAction เรียกต่อ)
+   ไม่งั้นจะกลายเป็นห่อซ้อนกันแล้วโดนธงกันกดซ้ำของตัวเองบล็อก */
+const SUBMIT_LABELS = {
+  submitOrder:              'กำลังส่งใบแจ้งซ่อม...',
+  confirmAction:            'กำลังส่งข้อมูล...',
+  saveNeededDate:           'กำลังบันทึกการแก้ไข...',
+  assignTechnician:         'กำลังมอบหมายงาน...',
+  startRepair:              'กำลังอัปเดตสถานะ...',
+  finishRepair:             'กำลังอัปเดตสถานะ...',
+  saveMaintRecord:          'กำลังบันทึกข้อมูลซ่อมบำรุง...',
+  saveOpinionStep:          'กำลังบันทึกความคืบหน้า...',
+  markAllRead:              'กำลังบันทึก...',
+  submitAccessRequest:      'กำลังส่งคำขอสิทธิ์...',
+  cancelMyAccessRequest:    'กำลังยกเลิกคำขอ...',
+  approveAccessRequest:     'กำลังอนุมัติคำขอ...',
+  rejectAccessRequest:      'กำลังบันทึกการปฏิเสธ...',
+  saveAccessRoles:          'กำลังบันทึกบทบาท...',
+  revokeAccessRequest:      'กำลังถอนสิทธิ์...',
+  addLineUserManually:      'กำลังเพิ่มผู้ใช้ LINE...',
+  removeLegacyLineUserRole: 'กำลังลบผู้รับแจ้งเตือน...',
+  saveWebhook:              'กำลังบันทึก Webhook...',
+  confirmResetAllData:      'กำลังล้างข้อมูลทั้งหมด...',
+};
+Object.keys(SUBMIT_LABELS).forEach(name => {
+  const inner = window[name];
+  if(typeof inner !== 'function'){ console.error('SUBMIT_LABELS: ไม่พบฟังก์ชัน ' + name); return; }
+  const label = SUBMIT_LABELS[name];
+  window[name] = function(...args){ return submitting(name, label, () => inner.apply(this, args)); };
+});
 /* เทียบชื่อคนแบบไม่สนช่องว่าง/ตัวพิมพ์/รูปแบบ Unicode — ชื่อเดียวกันที่พิมพ์คนละที่ (ชีตผู้รับ,
    คำขอสิทธิ์, ชื่อช่างใน config) มักต่างกันแค่เว้นวรรคซ้ำ, nbsp หรืออักขระความกว้างศูนย์ */
 function normPersonName(t){
@@ -2211,13 +2372,26 @@ async function persistOrders(){
   if(!state.ordersLoaded){ console.warn('persistOrders skipped — orders not fully loaded yet'); return false; }
   return await storeSet('orders', state.orders);
 }
+/* บันทึกใบกลับเซิร์ฟเวอร์ แล้ว "ย้อนคืน" ค่าที่เพิ่งแก้ในหน้าจอถ้าเขียนไม่สำเร็จ
+   จำเป็นคู่กับกล่อง ✓ "ส่งข้อมูลเรียบร้อย" ที่เด่นกว่าเดิมมาก: ถ้าปล่อยให้ state ค้างอยู่กับผลที่
+   ไม่เคยเข้าเซิร์ฟเวอร์ ผู้ใช้จะเห็นทั้งสถานะใหม่บนจอและกล่องยืนยัน ทั้งที่คนอื่นไม่เห็นอะไรเลย
+   คืน true เมื่อบันทึกสำเร็จเท่านั้น — ผู้เรียกต้อง return ทันทีเมื่อได้ false (ห้าม toast สำเร็จต่อ) */
+async function persistOrderChange(undo, errMsg){
+  if(await persistOrders()) return true;
+  try{ undo(); }catch(e){ console.error('undo failed', e); }
+  toast(errMsg || 'บันทึกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+  render();
+  return false;
+}
 
 function openActionBox(id, type){
   state.ui.actionFor = id; state.ui.actionType = type; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  state.ui.resubmitAttached = null;
   render();
 }
 function closeActionBox(){
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote = ''; state.ui.resubmitPhotos = [];
+  state.ui.resubmitAttached = null;
   render();
 }
 
@@ -2245,7 +2419,7 @@ async function saveNeededDate(id){
   const newUrgent = !!state.ui.editNeededUrgent;
   const oldDate = o.neededDate || '';
   const oldUrgent = !!o.urgent;
-  if(newDate === oldDate && newUrgent === oldUrgent){ cancelEditNeededDate(); return; }
+  if(newDate === oldDate && newUrgent === oldUrgent){ toastPlain('ไม่มีการเปลี่ยนแปลง'); cancelEditNeededDate(); return; }
 
   const changes = [];
   if(newDate !== oldDate) changes.push(`วันที่ต้องการใช้งาน ${oldDate ? fmtDate(oldDate) : '—'} → ${fmtDate(newDate)}`);
@@ -2283,32 +2457,36 @@ function removeResubmitPhoto(idx){
 }
 // อิงจากสถานะใบแจ้งซ่อม (ไม่ใช่ state.role ตรงๆ) เพื่อให้ admin ซึ่งผ่าน hasRole() ได้ทุกบทบาท
 // พร้อมกัน ยังคงรันฟังก์ชันที่ถูกต้องตรงกับกล่องการทำงานที่กำลังเปิดอยู่จริง
-function confirmAction(id){
+async function confirmAction(id){
   const o = getOrder(id); if(!o) return;
   const type = state.ui.actionType;
   const note = state.ui.actionNote.trim();
   if(type !== 'approve' && type !== 'verify_pass' && !note){ toast('กรุณาระบุหมายเหตุ', true); return; }
+  // ต้อง return promise ของงานจริงออกไปเสมอ ไม่งั้น submitting() จะปิดกล่อง "กำลังส่งข้อมูล"
+  // ตั้งแต่ยังไม่ได้เริ่มเขียนเซิร์ฟเวอร์ (เดิมเป็น fire-and-forget เพราะไม่มีใครรอผลอยู่แล้ว)
   if(o.status === 'PENDING_FM'){
-    if(type==='approve') approveFm(id, note);
-    else if(type==='reject') rejectFm(id, note);
-    else if(type==='needinfo') needInfoFm(id, note);
+    if(type==='approve') return approveFm(id, note);
+    if(type==='reject') return rejectFm(id, note);
+    if(type==='needinfo') return needInfoFm(id, note);
   } else if(o.status === 'PENDING_GM'){
-    if(type==='approve') approveGm(id, note);
-    else if(type==='reject') rejectGm(id, note);
-    else if(type==='needinfo') needInfoGm(id, note);
+    if(type==='approve') return approveGm(id, note);
+    if(type==='reject') return rejectGm(id, note);
+    if(type==='needinfo') return needInfoGm(id, note);
   } else if((o.status === 'NEEDS_INFO_FM' || o.status === 'NEEDS_INFO_GM') && type === 'resubmit'){
-    resubmitInfo(id, note);
+    return resubmitInfo(id, note);
   } else if(o.status === 'PENDING_VERIFY' && (type === 'verify_pass' || type === 'verify_fail')){
-    verifyRepair(id, type, note);
+    return verifyRepair(id, type, note);
   }
 }
 async function approveFm(id, note){
   const o = getOrder(id); if(!o) return;
   const n = (note||'').trim();
+  const prev = { approval: o.approvals.fm, status: o.status, histLen: o.statusHistory.length };
   o.approvals.fm = { status:'approved', by: ROLES.fm.label, at: nowIso(), note: n };
   o.status = 'PENDING_GM';
   o.statusHistory.push({ status:'PENDING_GM', at: nowIso(), note:'ผู้จัดการโรงงานอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.approvals.fm = prev.approval; o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'บันทึกการอนุมัติไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   // ผู้แจ้งซ่อมต้องรู้ความคืบหน้าของใบตัวเองทุกขั้น ไม่ใช่รู้เฉพาะตอนถูกปฏิเสธ
   // ยิงทั้งสองคนพร้อมกัน — ไล่ทีละคนคือต้นเหตุที่คนหลังๆ ไม่ได้รับ (ดูหมายเหตุที่ queueNotification)
   await Promise.all([
@@ -2321,10 +2499,12 @@ async function approveFm(id, note){
 async function rejectFm(id, note){
   const o = getOrder(id); if(!o) return;
   const reason = (note||'').trim() || 'ไม่ระบุเหตุผล';
+  const prev = { approval: o.approvals.fm, status: o.status, histLen: o.statusHistory.length };
   o.approvals.fm = { status:'rejected', by: ROLES.fm.label, at: nowIso(), note: reason };
   o.status = 'REJECTED';
   o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการโรงงานไม่อนุมัติ: ' + reason });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.approvals.fm = prev.approval; o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'บันทึกการไม่อนุมัติไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการโรงงาน (${reason})`);
   toast('บันทึกการไม่อนุมัติแล้ว');
   closeActionBox();
@@ -2332,9 +2512,11 @@ async function rejectFm(id, note){
 async function needInfoFm(id, note){
   const o = getOrder(id); if(!o) return;
   const msg = (note||'').trim();
+  const prev = { status: o.status, histLen: o.statusHistory.length };
   o.status = 'NEEDS_INFO_FM';
   o.statusHistory.push({ status:'NEEDS_INFO_FM', at: nowIso(), note:'ผู้จัดการโรงงานขอข้อมูลเพิ่มเติม: ' + msg });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'ส่งคำขอข้อมูลเพิ่มเติมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await notifyOrderRequester(o, `ผู้จัดการโรงงานต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
@@ -2342,10 +2524,12 @@ async function needInfoFm(id, note){
 async function approveGm(id, note){
   const o = getOrder(id); if(!o) return;
   const n = (note||'').trim();
+  const prev = { approval: o.approvals.gm, status: o.status, histLen: o.statusHistory.length };
   o.approvals.gm = { status:'approved', by: ROLES.gm.label, at: nowIso(), note: n };
   o.status = 'PENDING_ASSIGN';
   o.statusHistory.push({ status:'PENDING_ASSIGN', at: nowIso(), note:'ผู้จัดการทั่วไปอนุมัติแล้ว' + (n ? ' — หมายเหตุ: ' + n : '') });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.approvals.gm = prev.approval; o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'บันทึกการอนุมัติไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await Promise.all([
     pushNotification('maint', id, o.docNumber, `ใบแจ้งซ่อมแผนก ${o.department} ผ่านการอนุมัติครบแล้ว กรุณามอบหมายช่างผู้รับผิดชอบ`),
     notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านผ่านการอนุมัติของผู้จัดการทั่วไปแล้ว รอผู้จัดการแผนกซ่อมบำรุงมอบหมายช่าง`),
@@ -2356,10 +2540,12 @@ async function approveGm(id, note){
 async function rejectGm(id, note){
   const o = getOrder(id); if(!o) return;
   const reason = (note||'').trim() || 'ไม่ระบุเหตุผล';
+  const prev = { approval: o.approvals.gm, status: o.status, histLen: o.statusHistory.length };
   o.approvals.gm = { status:'rejected', by: ROLES.gm.label, at: nowIso(), note: reason };
   o.status = 'REJECTED';
   o.statusHistory.push({ status:'REJECTED', at: nowIso(), note:'ผู้จัดการทั่วไปไม่อนุมัติ: ' + reason });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.approvals.gm = prev.approval; o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'บันทึกการไม่อนุมัติไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await notifyOrderRequester(o, `ใบแจ้งซ่อมของท่านไม่ได้รับการอนุมัติจากผู้จัดการทั่วไป (${reason})`);
   toast('บันทึกการไม่อนุมัติแล้ว');
   closeActionBox();
@@ -2367,9 +2553,11 @@ async function rejectGm(id, note){
 async function needInfoGm(id, note){
   const o = getOrder(id); if(!o) return;
   const msg = (note||'').trim();
+  const prev = { status: o.status, histLen: o.statusHistory.length };
   o.status = 'NEEDS_INFO_GM';
   o.statusHistory.push({ status:'NEEDS_INFO_GM', at: nowIso(), note:'ผู้จัดการทั่วไปขอข้อมูลเพิ่มเติม: ' + msg });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'ส่งคำขอข้อมูลเพิ่มเติมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await notifyOrderRequester(o, `ผู้จัดการทั่วไปต้องการข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมของท่าน: ${msg}`);
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
@@ -2388,7 +2576,11 @@ async function resubmitInfo(id, note){
   const newPhotos = (state.ui.resubmitPhotos || []).slice();
   // บันทึกรูปให้จบก่อนแตะใบ — จะได้รู้ช่วงดัชนีจริงที่รูปไปนั่งอยู่ ก่อนจะเขียนมันลงคอมเมนต์
   // ถ้าขั้นนี้ล้มเหลว คือยังไม่มีอะไรถูกแก้เลย ผู้ใช้กดส่งซ้ำได้ทันทีโดยไม่เสี่ยงรูปซ้ำ/คอมเมนต์ค้าง
-  let attached = null;   // { from, count } — ตั้งเมื่อรูปลงเซิร์ฟเวอร์สำเร็จจริงเท่านั้น
+  //
+  // ถ้ารูปขึ้นเซิร์ฟเวอร์สำเร็จแล้วแต่ "เขียนใบ" ไม่สำเร็จ (คนละคำขอกัน) กล่องยังเปิดค้างให้กดส่งใหม่ได้
+  // รอบใหม่ต้องไม่อัปโหลดรูปชุดเดิมซ้ำอีก เพราะที่นี่ต่อท้ายอย่างเดียว รูปจะกลายเป็นสองชุด
+  // จึงย้ายรูปออกจากคิวแล้วจำช่วงดัชนีที่ลงไปแล้วไว้ที่ state.ui.resubmitAttached (ล้างทิ้งตอนปิดกล่อง)
+  let attached = state.ui.resubmitAttached || null;   // { from, count } — ตั้งเมื่อรูปลงเซิร์ฟเวอร์สำเร็จจริงเท่านั้น
   if(newPhotos.length){
     const existing = await storeGet('photos:'+id);
     /* undefined = ดึงไม่สำเร็จ ซึ่งคนละความหมายกับ null ที่แปลว่า "ใบนี้ยังไม่เคยมีรูป"
@@ -2405,15 +2597,21 @@ async function resubmitInfo(id, note){
       return;
     }
     attached = { from: base.length, count: newPhotos.length };
+    state.ui.resubmitAttached = attached;
+    state.ui.resubmitPhotos = [];   // ลงเซิร์ฟเวอร์แล้ว ออกจากคิวได้ กดส่งใหม่จะไม่อัปซ้ำ
     o.photoCount = merged.length;
     if(state.selectedOrderId === id) state.detailPhotos = merged;
   }
   const backTo = o.status === 'NEEDS_INFO_FM' ? 'PENDING_FM' : 'PENDING_GM';
+  const prev = { status: o.status, histLen: o.statusHistory.length };
   o.status = backTo;
   const entry = { status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + msg + (attached ? ` (แนบรูปเพิ่ม ${attached.count} รูป)` : '') };
   if(attached){ entry.photoFrom = attached.from; entry.photoCount = attached.count; }
   o.statusHistory.push(entry);
-  await persistOrders();
+  // รูปที่อัปสำเร็จไปแล้วอยู่บนเซิร์ฟเวอร์จริง จึงไม่ย้อน o.photoCount — ย้อนแค่สถานะใบกับคอมเมนต์
+  // กดส่งใหม่จะใช้ช่วงดัชนีเดิมจาก state.ui.resubmitAttached ต่อได้เลย
+  if(!await persistOrderChange(() => { o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'ส่งข้อมูลเพิ่มเติมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await pushNotification(backTo==='PENDING_FM' ? 'fm' : 'gm', id, o.docNumber, `ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมแผนก ${o.department} แล้ว กรุณาตรวจสอบอีกครั้ง`);
   toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
   closeActionBox();
@@ -2433,10 +2631,12 @@ async function assignTechnician(id){
   if(endDate < startDate){ toast('วันที่คาดว่าจะเสร็จต้องไม่ก่อนวันเริ่มงาน', true); return; }
   if(!techs.length){ toast('กรุณาเลือกชื่อช่างผู้รับผิดชอบอย่างน้อย 1 คน', true); return; }
   if(!executionPlan){ toast('กรุณาเลือกการดำเนินงาน', true); return; }
+  const prev = { assignment: o.assignment, status: o.status, histLen: o.statusHistory.length };
   o.assignment = { technicians: techs, assignedBy: ROLES.maint.label, assignedAt: nowIso(), startDate, endDate, executionPlan, receivedByName: receivedBy };
   o.status = 'ASSIGNED';
   o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:`รับใบแจ้งซ่อมโดย ${receivedBy} — มอบหมายงานให้ ${techs.join(', ')} (กำหนดงาน ${fmtDate(startDate)} - ${fmtDate(endDate)}) — การดำเนินงาน: ${EXECUTION_PLAN_META[executionPlan]}` });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.assignment = prev.assignment; o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'มอบหมายงานไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await Promise.all([
     notifyOrderRequester(o, `งานซ่อมของท่านถูกมอบหมายให้ ${techs.join(', ')} แล้ว สถานะ: รอดำเนินการ`),
     ...techs.map(tech => notifyTech(o, tech,
@@ -2533,7 +2733,8 @@ async function saveMaintRecord(id){
   const next = { causeAnalysis: cause, inspectorOpinion: opinion, parts: collectPartRows(state.ui.maintRecordParts) };
   const prevRecord = o.maintRecord, prevProgress = o.opinionProgress;
   const changes = maintRecordChanges(prevRecord, next);
-  if(!changes.length){ toast('ไม่มีการเปลี่ยนแปลงของบันทึกข้อมูลซ่อมบำรุง'); closeMaintRecord(); return; }
+  // ไม่มีอะไรเปลี่ยน = ไม่ได้ส่งอะไรขึ้นเซิร์ฟเวอร์เลย จึงต้องไม่ไปขึ้นกล่อง ✓ "ส่งข้อมูลเรียบร้อย"
+  if(!changes.length){ toastPlain('ไม่มีการเปลี่ยนแปลงของบันทึกข้อมูลซ่อมบำรุง'); closeMaintRecord(); return; }
   const by = maintRecordEditorName();
   const histLen = o.statusHistory.length;
   const prevOpinion = progressTrackOf(o), prevLabel = progressTrackLabel(o);
@@ -2710,19 +2911,23 @@ async function notifyOpinionStep(o, step, date, note, isEdit){
 }
 async function startRepair(id){
   const o = getOrder(id); if(!o) return;
+  const prev = { status: o.status, histLen: o.statusHistory.length };
   o.status = 'IN_PROGRESS';
   const techLabel = assignedTechs(o).join(', ') || 'ช่าง';
   o.statusHistory.push({ status:'IN_PROGRESS', at: nowIso(), note: techLabel + ' เริ่มดำเนินการซ่อม' });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'อัปเดตสถานะไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await notifyOrderRequester(o, `งานซ่อมของท่านสถานะ: กำลังซ่อม`);
   toast('อัปเดตสถานะ: กำลังซ่อม');
   render();
 }
 async function finishRepair(id){
   const o = getOrder(id); if(!o) return;
+  const prev = { status: o.status, histLen: o.statusHistory.length };
   o.status = 'PENDING_VERIFY';
   o.statusHistory.push({ status:'PENDING_VERIFY', at: nowIso(), note:'ซ่อมเสร็จสิ้น รอผู้แจ้งซ่อมตรวจสอบการใช้งาน' });
-  await persistOrders();
+  if(!await persistOrderChange(() => { o.status = prev.status; o.statusHistory.length = prev.histLen; },
+      'อัปเดตสถานะไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
   await Promise.all([
     notifyOrderRequester(o, `งานซ่อมของท่านเสร็จสิ้นแล้ว กรุณาตรวจสอบการใช้งานเครื่องจักร`),
     pushNotification('maint', id, o.docNumber, `ช่างแจ้งซ่อมเสร็จแล้ว (${assignedTechs(o).join(', ') || 'ไม่ระบุช่าง'}) รอผู้แจ้งซ่อมตรวจรับ`),
@@ -2735,11 +2940,16 @@ async function finishRepair(id){
 async function verifyRepair(id, type, note){
   const o = getOrder(id); if(!o) return;
   const n = (note||'').trim();
+  const prev = { status: o.status, verification: o.verification, verificationHistory: o.verificationHistory, histLen: o.statusHistory.length };
+  const undo = () => {
+    o.status = prev.status; o.verification = prev.verification;
+    o.verificationHistory = prev.verificationHistory; o.statusHistory.length = prev.histLen;
+  };
   if(type === 'verify_pass'){
     o.status = 'DONE';
     o.verification = { result:'pass', by:o.requestedBy, at: nowIso(), note:n };
     o.statusHistory.push({ status:'DONE', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ผ่าน ใช้งานได้ปกติ' + (n ? ' — หมายเหตุ: ' + n : '') });
-    await persistOrders();
+    if(!await persistOrderChange(undo, 'บันทึกผลการตรวจสอบไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
     await Promise.all([
       pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบแล้ว งานซ่อมแผนก ${o.department} ผ่าน ปิดงานเรียบร้อย`),
       ...assignedTechs(o).map(tech => notifyTech(o, tech,
@@ -2753,7 +2963,7 @@ async function verifyRepair(id, type, note){
     o.verification = { result:'fail', by:o.requestedBy, at: nowIso(), note:n };
     o.verificationHistory = [...(o.verificationHistory||[]), o.verification];
     o.statusHistory.push({ status:'ASSIGNED', at: nowIso(), note:'ผู้แจ้งซ่อมตรวจสอบแล้ว: ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ' + n });
-    await persistOrders();
+    if(!await persistOrderChange(undo, 'บันทึกผลการตรวจสอบไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
     const techs = assignedTechs(o);
     await Promise.all([
       pushNotification('maint', id, o.docNumber, `ผู้แจ้งซ่อมตรวจสอบพบว่างานซ่อมแผนก ${o.department} ไม่ผ่าน ต้องซ่อมเพิ่มเติม เนื่องจาก ${n}`),
@@ -2802,8 +3012,16 @@ async function confirmResetAllData(){
 async function resetAllData(){
   state.counters = {}; state.orders = []; state.notifications = [];
   pendingNotifs.clear();   // ไม่งั้นแถวที่ยังค้างยืนยันจะถูกยัดกลับเข้ามาหลังล้างข้อมูล
-  await storeSet('counters', state.counters);
-  await storeSet('orders', state.orders); await storeSet('notifications', state.notifications);
+  const okCounters = await storeSet('counters', state.counters);
+  const okOrders = await storeSet('orders', state.orders);
+  const okNotifs = await storeSet('notifications', state.notifications);
+  if(!(okCounters && okOrders && okNotifs)){
+    // เขียนไม่ครบ = บนเซิร์ฟเวอร์ถูกล้างไปบางส่วนจริง ย้อนค่าในเครื่องกลับไม่ได้แล้ว
+    // จึงบอกตามตรงแล้วปล่อยให้รอบ poll ถัดไปดึงสภาพจริงมาแสดง ห้ามขึ้น "เรียบร้อย"
+    toast('ล้างข้อมูลไม่สำเร็จครบทุกส่วน (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    render();
+    return;
+  }
   toast('ล้างข้อมูลระบบเรียบร้อย');
   render();
 }
@@ -2994,7 +3212,7 @@ function renderNew(){
       </div>
     </div>
 
-    <button class="btn btn-primary btn-block" onclick="submitOrder()">📨 ส่งเอกสาร</button>
+    <button class="btn btn-primary btn-block" onclick="submitOrder()" ${submitAttr()}>${submitText('submitOrder', '📨 ส่งเอกสาร', 'กำลังส่งเอกสาร...')}</button>
   </div>`;
 }
 
@@ -3108,7 +3326,7 @@ function renderDetail(){
         <span class="txt">🚨 ต้องการด่วน</span>
       </label>
       <div class="order-actions" style="margin-top:8px;">
-        <button class="btn btn-primary btn-sm" onclick="saveNeededDate('${o.id}')">บันทึกการแก้ไข</button>
+        <button class="btn btn-primary btn-sm" onclick="saveNeededDate('${o.id}')" ${submitAttr()}>${submitText('saveNeededDate', 'บันทึกการแก้ไข', 'กำลังบันทึก...')}</button>
         <button class="btn btn-outline btn-sm" onclick="cancelEditNeededDate()">ยกเลิก</button>
       </div>`;
   } else {
@@ -3153,7 +3371,7 @@ function renderDetail(){
         <textarea class="input" data-fid="actionNote" oninput="state.ui.actionNote=this.value" placeholder="ระบุหมายเหตุ...">${escapeHtml(state.ui.actionNote)}</textarea>
         ${photoSection}
         <div class="order-actions">
-          <button class="btn ${(actionType==='reject'||actionType==='verify_fail')?'btn-danger-outline':'btn-primary'} btn-sm" onclick="confirmAction('${o.id}')">${CONFIRM_LABELS[actionType]}</button>
+          <button class="btn ${(actionType==='reject'||actionType==='verify_fail')?'btn-danger-outline':'btn-primary'} btn-sm" onclick="confirmAction('${o.id}')" ${submitAttr()}>${submitText('confirmAction', CONFIRM_LABELS[actionType], 'กำลังส่งข้อมูล...')}</button>
           <button class="btn btn-outline btn-sm" onclick="closeActionBox();">ยกเลิก</button>
         </div>
       </div>`;
@@ -3248,7 +3466,7 @@ function renderDetail(){
         </select>
       </div>
       <div class="order-actions" style="margin-top:10px;">
-        <button class="btn btn-primary" onclick="assignTechnician('${o.id}')">มอบหมายงาน</button>
+        <button class="btn btn-primary" onclick="assignTechnician('${o.id}')" ${submitAttr()}>${submitText('assignTechnician', 'มอบหมายงาน', 'กำลังมอบหมายงาน...')}</button>
       </div>
     </div>`;
   } else if(hasRole('tech') && o.status==='ASSIGNED' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
@@ -3256,14 +3474,14 @@ function renderDetail(){
     <div class="action-box">
       <h4>งานถูกมอบหมายแล้ว — รอเริ่มดำเนินการ</h4>
       ${waitingNote}
-      <div class="order-actions"><button class="btn btn-primary" onclick="startRepair('${o.id}')">▶ เริ่มดำเนินการซ่อม</button></div>
+      <div class="order-actions"><button class="btn btn-primary" onclick="startRepair('${o.id}')" ${submitAttr()}>${submitText('startRepair', '▶ เริ่มดำเนินการซ่อม', 'กำลังอัปเดตสถานะ...')}</button></div>
     </div>`;
   } else if(hasRole('tech') && o.status==='IN_PROGRESS' && (state.role==='admin' || assignedTechs(o).includes(state.myTechName))){
     actionBox = `
     <div class="action-box">
       <h4>กำลังซ่อม</h4>
       ${waitingNote}
-      <div class="order-actions"><button class="btn btn-success" onclick="finishRepair('${o.id}')">✓ ซ่อมเสร็จสิ้น</button></div>
+      <div class="order-actions"><button class="btn btn-success" onclick="finishRepair('${o.id}')" ${submitAttr()}>${submitText('finishRepair', '✓ ซ่อมเสร็จสิ้น', 'กำลังอัปเดตสถานะ...')}</button></div>
     </div>`;
   }
 
@@ -3317,7 +3535,7 @@ function renderDetail(){
           <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="addMaintPartRow()">+ เพิ่มรายการ</button>
         </div>
         <div class="order-actions">
-          <button class="btn btn-primary" onclick="saveMaintRecord('${o.id}')">บันทึก</button>
+          <button class="btn btn-primary" onclick="saveMaintRecord('${o.id}')" ${submitAttr()}>${submitText('saveMaintRecord', 'บันทึก', 'กำลังบันทึก...')}</button>
           <button class="btn btn-outline" onclick="closeMaintRecord()">ยกเลิก</button>
         </div>
       </div>`;
@@ -3366,7 +3584,7 @@ function renderDetail(){
           <label class="field-label">หมายเหตุ (ถ้ามี)</label>
           <textarea class="input" oninput="state.ui.opinionStepNote=this.value" placeholder="เช่น ชื่อร้าน/ผู้รับงาน เลขที่ใบสั่งซื้อ...">${escapeHtml(state.ui.opinionStepNote)}</textarea>
           <div class="order-actions">
-            <button class="btn btn-primary btn-sm" onclick="saveOpinionStep('${o.id}')">${rec ? 'บันทึกการแก้ไข' : 'ยืนยันและแจ้งเตือน'}</button>
+            <button class="btn btn-primary btn-sm" onclick="saveOpinionStep('${o.id}')" ${submitAttr()}>${submitText('saveOpinionStep', rec ? 'บันทึกการแก้ไข' : 'ยืนยันและแจ้งเตือน', 'กำลังบันทึก...')}</button>
             <button class="btn btn-outline btn-sm" onclick="closeOpinionStep()">ยกเลิก</button>
           </div>
         </div>` : '';
@@ -3450,7 +3668,8 @@ async function markAllRead(){
     list.forEach(n => { if(notifIsMine(n)) n.read = true; });
     return list;
   });
-  if(!ok) toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true);
+  if(!ok){ toast('บันทึกไม่สำเร็จ กรุณาลองใหม่', true); render(); return; }
+  toast('ทำเครื่องหมายว่าอ่านแล้วทั้งหมดเรียบร้อย');
   render();
 }
 function renderNotif(){
@@ -3471,7 +3690,7 @@ function renderNotif(){
   <h2 class="view-title">การแจ้งเตือน — ${ROLES[state.role].label}</h2>
   <p class="view-sub">${state.role==='admin' ? 'การแจ้งเตือนในระบบของทุกบทบาทรวมกัน' : 'การแจ้งเตือนในระบบสำหรับบทบาทนี้'} (พร้อมส่งต่อไปยัง LINE หากตั้งค่า Webhook ไว้ในหน้าตั้งค่า)</p>
   ${!state.ordersLoaded ? `<p class="desc">⏳ กำลังโหลดรายการ...</p>` : ''}
-  ${mine.length ? `<div style="margin-bottom:12px;"><button class="btn btn-outline btn-sm" onclick="markAllRead()">ทำเครื่องหมายว่าอ่านแล้วทั้งหมด</button></div>` : ''}
+  ${mine.length ? `<div style="margin-bottom:12px;"><button class="btn btn-outline btn-sm" onclick="markAllRead()" ${submitAttr()}>${submitText('markAllRead', 'ทำเครื่องหมายว่าอ่านแล้วทั้งหมด', 'กำลังบันทึก...')}</button></div>` : ''}
   ${mine.length ? items : `<div class="empty-state"><div class="big">📭</div>ยังไม่มีการแจ้งเตือนสำหรับบทบาทนี้</div>`}
   `;
 }
@@ -3565,8 +3784,8 @@ function renderAccessRequests(){
         </select>
       </div>
       <div class="order-actions" style="margin-top:12px;">
-        <button class="btn btn-success btn-sm" onclick="approveAccessRequest('${r.id}')">✓ อนุมัติ</button>
-        <button class="btn btn-danger-outline btn-sm" onclick="rejectAccessRequest('${r.id}')">ปฏิเสธ</button>
+        <button class="btn btn-success btn-sm" onclick="approveAccessRequest('${r.id}')" ${submitAttr()}>${submitText('approveAccessRequest', '✓ อนุมัติ', 'กำลังอนุมัติ...')}</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="rejectAccessRequest('${r.id}')" ${submitAttr()}>${submitText('rejectAccessRequest', 'ปฏิเสธ', 'กำลังบันทึก...')}</button>
       </div>
     </div>`;
   }).join('');
@@ -3607,7 +3826,7 @@ function renderAccessRequests(){
             <p class="desc" style="margin:4px 0 0; font-size:12px;">ไม่พบชื่อในรายการ? ให้คนนั้นทักแชทหา LINE OA หนึ่งครั้ง หรือเพิ่ม userId เองที่หัวข้อ "เพิ่มผู้ใช้ LINE ด้วยตัวเอง" ด้านล่าง</p>
           </div>
           <div class="order-actions" style="margin-top:10px;">
-            <button class="btn btn-success btn-sm" onclick="saveAccessRoles('${r.id}')">บันทึก</button>
+            <button class="btn btn-success btn-sm" onclick="saveAccessRoles('${r.id}')" ${submitAttr()}>${submitText('saveAccessRoles', 'บันทึก', 'กำลังบันทึก...')}</button>
             <button class="btn btn-outline btn-sm" onclick="cancelEditAccessRoles()">ยกเลิก</button>
           </div>
         </div>
@@ -3619,7 +3838,7 @@ function renderAccessRequests(){
       <td>${pill}${granted ? ` <span style="font-size:12px;">${escapeHtml(granted)}</span>` : ''}${r.status === 'approved' ? `<div style="font-size:11.5px; color:var(--slate);">LINE: ${r.lineUserId ? escapeHtml(lineLabelFor(r.lineUserId)) : 'ยังไม่ผูก'}</div>` : ''}</td>
       <td>
         ${r.status === 'approved' ? `<button class="del" onclick="startEditAccessRoles('${r.id}')">แก้ไขบทบาท</button> ` : ''}
-        <button class="del" onclick="revokeAccessRequest('${r.id}')">ถอนสิทธิ์/ลบ</button>
+        <button class="del" onclick="revokeAccessRequest('${r.id}')" ${submitAttr()}>${submitText('revokeAccessRequest', 'ถอนสิทธิ์/ลบ', 'กำลังถอนสิทธิ์...')}</button>
       </td>
     </tr>`;
   }).join('');
@@ -3633,7 +3852,7 @@ function renderAccessRequests(){
     return `<tr>
       <td>${escapeHtml(m.name || lineLabelFor(id))}<div class="mono" style="font-size:10.5px; color:var(--slate-light); word-break:break-all;">${escapeHtml(id)}</div></td>
       <td style="font-size:12.5px;">${escapeHtml(what || '-')}</td>
-      <td><button class="del" onclick="removeLegacyLineUserRole('${escapeHtml(id)}')">ลบ</button></td>
+      <td><button class="del" onclick="removeLegacyLineUserRole('${escapeHtml(id)}')" ${submitAttr()}>${submitText('removeLegacyLineUserRole', 'ลบ', 'กำลังลบ...')}</button></td>
     </tr>`;
   }).join('');
 
@@ -3662,7 +3881,7 @@ function renderAccessRequests(){
     <div class="inline-form">
       <input class="input mono" data-fid="newLineUserId" style="font-size:12px;" value="${escapeHtml(state.ui.newLineUserId)}" oninput="state.ui.newLineUserId=this.value" placeholder="U1234567890abcdef...">
       <input class="input" data-fid="newLineUserName" value="${escapeHtml(state.ui.newLineUserName)}" oninput="state.ui.newLineUserName=this.value" placeholder="ชื่อ-นามสกุล">
-      <button class="btn btn-outline btn-sm" onclick="addLineUserManually()">เพิ่ม</button>
+      <button class="btn btn-outline btn-sm" onclick="addLineUserManually()" ${submitAttr()}>${submitText('addLineUserManually', 'เพิ่ม', 'กำลังเพิ่ม...')}</button>
     </div>
     <div class="summary-link" style="margin-top:12px;">
       <div class="txt">เปิดแท็บ <b>LINE Users</b> เพื่อดู userId ของคนที่ทักเข้ามา</div>
@@ -3781,7 +4000,7 @@ function renderSettings(){
     <div class="inline-form">
       <select class="input" onchange="state.ui.newWebhookRole=this.value">${webhookRoleOpts}</select>
       <input class="input" data-fid="newWebhookUrl" placeholder="https://..." oninput="state.ui.newWebhookUrl=this.value">
-      <button class="btn btn-outline btn-sm" onclick="saveWebhook()">บันทึก</button>
+      <button class="btn btn-outline btn-sm" onclick="saveWebhook()" ${submitAttr()}>${submitText('saveWebhook', 'บันทึก', 'กำลังบันทึก...')}</button>
     </div>
     <h3 style="margin-top:20px;">ตรวจสอบ relay LINE</h3>
     <p class="desc">ใช้เมื่อมีคนทักหา LINE OA แล้ว userId ไม่ขึ้นในแท็บ <b>LINE Users</b> — จะบอกได้ว่าปัญหาอยู่ที่ relay เองหรืออยู่ที่การตั้งค่า Webhook ฝั่ง LINE</p>
@@ -3816,7 +4035,7 @@ function renderSettings(){
       <label class="field-label">พิมพ์คำว่า "ล้างข้อมูล" เพื่อยืนยัน</label>
       <input class="input" data-fid="resetConfirmText" value="${escapeHtml(state.ui.resetConfirmText)}" oninput="state.ui.resetConfirmText=this.value" placeholder="ล้างข้อมูล">
       <div class="order-actions" style="margin-top:10px;">
-        <button class="btn btn-danger-outline btn-sm" onclick="confirmResetAllData()">ยืนยันล้างข้อมูลทั้งหมด</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="confirmResetAllData()" ${submitAttr()}>${submitText('confirmResetAllData', 'ยืนยันล้างข้อมูลทั้งหมด', 'กำลังล้างข้อมูล...')}</button>
         <button class="btn btn-outline btn-sm" onclick="cancelResetConfirm()">ยกเลิก</button>
       </div>
     </div>` : `
@@ -3963,8 +4182,8 @@ function renderRequestAccess(){
         <label class="field-label">หมายเหตุถึงผู้ดูแล</label>
         <input class="input" data-fid="reqNote" value="${escapeHtml(u.reqNote)}" oninput="state.ui.reqNote=this.value" placeholder="เช่น เบอร์ติดต่อ หรือข้อมูลยืนยันตัวตน">
       </div>
-      <button class="btn btn-primary btn-block" onclick="submitAccessRequest()" ${u.reqSending ? 'disabled' : ''}>
-        ${u.reqSending ? 'กำลังส่งคำขอ...' : 'ส่งคำขอสิทธิ์'}
+      <button class="btn btn-primary btn-block" onclick="submitAccessRequest()" ${submitAttr()}>
+        ${submitText('submitAccessRequest', 'ส่งคำขอสิทธิ์', 'กำลังส่งคำขอ...')}
       </button>
     </div>
     ${renderAdminBootstrap()}`);
@@ -4009,7 +4228,7 @@ function renderPendingAccess(){
       </table>
       <div class="order-actions" style="margin-top:14px; justify-content:center;">
         <button class="btn btn-outline btn-sm" onclick="recheckAccess(true)">ตรวจสอบสถานะตอนนี้</button>
-        <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">แก้ไข / ยกเลิกคำขอ</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()" ${submitAttr()}>${submitText('cancelMyAccessRequest', 'แก้ไข / ยกเลิกคำขอ', 'กำลังยกเลิก...')}</button>
       </div>
     </div>
     ${renderSheetGrantFallback()}
@@ -4022,7 +4241,7 @@ function renderRejectedAccess(){
       <div style="font-size:44px;">🚫</div>
       <h2 class="view-title" style="margin-top:6px;">คำขอสิทธิ์ไม่ได้รับการอนุมัติ</h2>
       <p class="view-sub">คำขอของ "${escapeHtml(r.name || '-')}" ถูกปฏิเสธโดยผู้ดูแลระบบ หากเข้าใจว่าเป็นความเข้าใจผิด กรุณาติดต่อผู้ดูแลระบบ แล้วส่งคำขอใหม่ได้</p>
-      <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()">ส่งคำขอใหม่</button>
+      <button class="btn btn-outline btn-sm" onclick="cancelMyAccessRequest()" ${submitAttr()}>${submitText('cancelMyAccessRequest', 'ส่งคำขอใหม่', 'กำลังยกเลิก...')}</button>
     </div>
     ${renderAdminBootstrap()}`);
 }
@@ -4107,6 +4326,11 @@ function startPolling(){
 }
 async function pollForUpdates(){
   if(pollInFlight) return;
+  /* ระหว่างที่ submitting() ยังเขียนข้อมูลไม่เสร็จ ห้ามดึงของจากเซิร์ฟเวอร์มาทับ state:
+     Apps Script อ่านหลังเขียนมีดีเลย์ รอบที่วิ่งคาบเกี่ยวกันจะได้ orders ตัวเก่ากลับมา แล้วลบสิ่งที่
+     ผู้ใช้เพิ่งกดไปทิ้งต่อหน้าต่อตา ทั้งที่กล่อง ✓ กำลังจะขึ้นว่าส่งเรียบร้อย
+     ข้ามรอบนี้ไปเฉยๆ ได้ เพราะทุกฟังก์ชันที่เขียนข้อมูลเรียก render() ให้เองอยู่แล้วเมื่อจบงาน */
+  if(submitFlight) return;
   pollInFlight = true;
   try{
     // lineUsers/lineUserRoles/lineRecipients ใช้แค่หน้าตั้งค่าของ admin — โหลด/poll แค่ตอนเคยเข้าหน้านั้น
