@@ -246,6 +246,9 @@
   .timeline-item{position:relative; padding-bottom:16px; font-size:13px;}
   .timeline-item::before{content:''; position:absolute; left:-21px; top:3px; width:9px; height:9px; border-radius:50%; background:var(--amber-dark);}
   .timeline-item .t-time{color:var(--slate); font-size:11.5px;}
+  /* รูปที่แนบมากับคอมเมนต์ในลำดับเหตุการณ์ — เล็กกว่าแกลเลอรีรูปประกอบของใบ เพื่อไม่ให้ไทม์ไลน์ขาด */
+  .timeline-item .t-photos{margin:6px 0 4px;}
+  .timeline-item .t-photos img{width:76px; height:76px;}
   .gallery{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
   .gallery img{width:100px; height:100px; object-fit:cover; border-radius:7px; border:1px solid var(--line); cursor:zoom-in;}
   .action-box{background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:16px; margin-top:16px;}
@@ -534,7 +537,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-07.1';
+const APP_VERSION = '2026-09-08.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -2371,20 +2374,45 @@ async function needInfoGm(id, note){
   toast('ส่งคำขอข้อมูลเพิ่มเติมแล้ว');
   closeActionBox();
 }
+/* ตอบคำขอข้อมูลเพิ่มเติม — รูปที่แนบมาต้องขึ้นในคอมเมนต์นั้นเอง ไม่ใช่ไปกองรวมอยู่ในแกลเลอรี
+   "รูปภาพประกอบ" ของใบเฉยๆ จนคนอนุมัติแยกไม่ออกว่ารูปไหนคือรูปที่เพิ่งส่งมาตอบคำถามของตัวเอง
+
+   รูปยังเก็บที่เดิมคือคีย์เดียว photos:<id> ไม่ได้แยกคีย์ต่อหนึ่งคอมเมนต์ เพราะทุกคีย์ที่เพิ่มคือ
+   หนึ่ง execution ของ Apps Script ที่หน้ารายละเอียดต้องรอเพิ่มตอนเปิดใบ สิ่งที่บันทึกลง statusHistory จึงเป็นแค่
+   "ช่วงดัชนี" ของรูปชุดนี้ในอาร์เรย์เดิม (photoFrom/photoCount) ที่ renderDetail() ตัดจาก state.detailPhotos
+   ซึ่งโหลดมาอยู่แล้วได้ฟรีๆ — ดัชนีชุดนี้ยืนอยู่ได้เพราะรูปถูก "ต่อท้าย" อย่างเดียว
+   ไม่มีที่ไหนในระบบลบหรือสลับรูปในคีย์นี้ */
 async function resubmitInfo(id, note){
   const o = getOrder(id); if(!o) return;
   const msg = (note||'').trim();
-  const newPhotos = state.ui.resubmitPhotos || [];
-  const backTo = o.status === 'NEEDS_INFO_FM' ? 'PENDING_FM' : 'PENDING_GM';
-  o.status = backTo;
-  o.statusHistory.push({ status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + msg + (newPhotos.length ? ` (แนบรูปเพิ่ม ${newPhotos.length} รูป)` : '') });
+  const newPhotos = (state.ui.resubmitPhotos || []).slice();
+  // บันทึกรูปให้จบก่อนแตะใบ — จะได้รู้ช่วงดัชนีจริงที่รูปไปนั่งอยู่ ก่อนจะเขียนมันลงคอมเมนต์
+  // ถ้าขั้นนี้ล้มเหลว คือยังไม่มีอะไรถูกแก้เลย ผู้ใช้กดส่งซ้ำได้ทันทีโดยไม่เสี่ยงรูปซ้ำ/คอมเมนต์ค้าง
+  let attached = null;   // { from, count } — ตั้งเมื่อรูปลงเซิร์ฟเวอร์สำเร็จจริงเท่านั้น
   if(newPhotos.length){
-    const existing = (await storeGet('photos:'+id)) || [];
-    const merged = existing.concat(newPhotos);
-    await storeSet('photos:'+id, merged);
+    const existing = await storeGet('photos:'+id);
+    /* undefined = ดึงไม่สำเร็จ ซึ่งคนละความหมายกับ null ที่แปลว่า "ใบนี้ยังไม่เคยมีรูป"
+       โค้ดเดิมเหมาสองกรณีนี้เป็น [] แล้วเขียนทับ — เน็ตกระตุกหนเดียวตอนส่งข้อมูลเพิ่ม
+       คือรูปต้นฉบับของใบหายทั้งชุดโดยไม่มีใครรู้ */
+    if(existing === undefined){
+      toast('ดึงรูปเดิมของใบนี้ไม่สำเร็จ จึงยังแนบรูปเพิ่มไม่ได้ กรุณาลองใหม่อีกครั้ง', true);
+      return;
+    }
+    const base = existing || [];
+    const merged = base.concat(newPhotos);
+    if(!await storeSet('photos:'+id, merged)){
+      toast('บันทึกรูปที่แนบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true);
+      return;
+    }
+    attached = { from: base.length, count: newPhotos.length };
     o.photoCount = merged.length;
     if(state.selectedOrderId === id) state.detailPhotos = merged;
   }
+  const backTo = o.status === 'NEEDS_INFO_FM' ? 'PENDING_FM' : 'PENDING_GM';
+  o.status = backTo;
+  const entry = { status: backTo, at: nowIso(), note:'ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติม: ' + msg + (attached ? ` (แนบรูปเพิ่ม ${attached.count} รูป)` : '') };
+  if(attached){ entry.photoFrom = attached.from; entry.photoCount = attached.count; }
+  o.statusHistory.push(entry);
   await persistOrders();
   await pushNotification(backTo==='PENDING_FM' ? 'fm' : 'gm', id, o.docNumber, `ผู้แจ้งซ่อมส่งข้อมูลเพิ่มเติมสำหรับใบแจ้งซ่อมแผนก ${o.department} แล้ว กรุณาตรวจสอบอีกครั้ง`);
   toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
@@ -3042,9 +3070,25 @@ function renderDetail(){
   }
   const meta = STATUS_META[o.status];
 
+  /* รูปที่แนบมาพร้อมคอมเมนต์ (ตอนนี้มีทางเดียวคือตอนส่งข้อมูลเพิ่มเติม — ดู resubmitInfo)
+     เก็บไว้เป็นช่วงดัชนีของ photos:<id> จึงตัดเอาจาก state.detailPhotos ที่โหลดมาแล้วได้เลย
+     ไม่มีคำขอเพิ่มไปที่ Apps Script — เปิดใบยังเร็วเท่าเดิม
+     - ใบเก่าที่ส่งข้อมูลเพิ่มก่อนมีฟีเจอร์นี้ไม่มีสองฟิลด์นี้ ก็แค่ไม่มีรูปในคอมเมนต์เหมือนเดิม
+     - รูปยังโหลดไม่มา (openDetail วาดหน้าจอก่อนรอ photos:<id>) ก็เว้นไว้ก่อน
+       แล้ว render() รอบที่รูปมาถึงจะเติมให้เอง */
+  function historyPhotos(h){
+    if(typeof h.photoFrom !== 'number' || !(h.photoCount > 0)) return '';
+    const shots = [];
+    for(let i = h.photoFrom; i < h.photoFrom + h.photoCount; i++){
+      if(state.detailPhotos[i]) shots.push(i);
+    }
+    if(!shots.length) return '';
+    return `<div class="gallery t-photos">${shots.map((idx, n) => `<img src="${state.detailPhotos[idx]}" alt="รูปที่แนบมากับข้อมูลเพิ่มเติมที่ ${n+1}" title="กดเพื่อดูเต็มจอ" onclick="openLightbox(${idx},'detail')">`).join('')}</div>`;
+  }
   const timeline = o.statusHistory.map(h => `
     <div class="timeline-item">
       <div>${STATUS_META[h.status] ? STATUS_META[h.status].label : h.status} — ${escapeHtml(h.note||'')}</div>
+      ${historyPhotos(h)}
       <div class="t-time">${fmtDateTime(h.at)}</div>
     </div>`).join('');
 

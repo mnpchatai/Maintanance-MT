@@ -929,6 +929,31 @@ flag and the timeline entry are all rolled back in memory and the editor stays
 open. Do not "optimise" that away — leaving the new value on screen after a
 failed write is exactly the "ส่งเรียบร้อยแต่ข้อมูลไม่เข้าชีต" trap that
 `submitOrder()` already guards against.
+Photos attached to a "ส่งข้อมูลเพิ่มเติม" reply show up inside that timeline
+entry, not only in the order's รูปภาพประกอบ gallery. The reply is the answer
+to a manager's ขอข้อมูลเพิ่มเติม question, and the manager reading it could
+not tell which of the pictures in the shared gallery were the ones just sent
+to answer it. All photos of an order still live in the single KV key
+`photos:<id>` — deliberately not one key per comment, because every extra key
+is another Apps Script execution the detail page would have to wait for when
+an order is opened. What `resubmitInfo()` records on the `statusHistory`
+entry is only the index range of that batch inside the existing array
+(`photoFrom`/`photoCount`); `historyPhotos()` in `renderDetail()` slices
+`state.detailPhotos`, which is already loaded, so the thumbnails cost no
+extra round trip. Clicking one opens the normal lightbox at that photo's
+absolute index, so swiping still walks the whole order.
+That range is only valid because photos are append-only — nothing in the app
+deletes or reorders entries in `photos:<id>`. Keep it that way, or the
+ranges recorded on older comments will silently start pointing at the wrong
+pictures.
+`resubmitInfo()` therefore saves the photos *before* it touches the order,
+and bails out with a toast if either half of that fails, so nothing is
+half-written and pressing ส่งข้อมูล again is safe (the selected photos are
+still in `state.ui.resubmitPhotos`). The `storeGet` read is checked for
+`undefined` specifically: the old code did `(await storeGet(...)) || []` and
+then wrote the concatenation back, so one dropped request while replying
+wiped every photo the order already had. Entries written before this change
+carry neither field and simply render without thumbnails; no migration.
 Diagnosing "the code is in the sheet but I still can't get in" — the guest
 screen's admin box has a `runConnectionTest()` button that probes
 `doGet('userRoles', <this device id>)` and `doGet('accessRequests')` and
