@@ -226,6 +226,10 @@
   .status-pill{
     font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:20px; white-space:nowrap;
   }
+  /* ป้ายช่างผู้รับผิดชอบในแถบสถานะของการ์ดหน้ารายการ — ชื่อช่างยาวกว่าป้ายอื่นมาก
+     ('ช่างสมชาย (ไฟฟ้า)' สองชื่อต่อกัน) จึงยอมตัดท้ายด้วย … แทนที่จะดันแถบจนล้นขอบจอมือถือ
+     ชื่อเต็มดูได้ที่หน้ารายละเอียด */
+  .tech-pill{display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis;}
   .order-body{margin-top:10px; font-size:13.5px;}
   .order-body .cause{color:var(--ink); margin-top:4px;}
   .order-actions{margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;}
@@ -548,7 +552,7 @@ let state = {
   filterStatus: 'ALL',
   filterDept: 'ALL',
   updateAvailable: false,
-  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], resubmitAttached:null, assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
+  ui: { actionFor:null, actionType:null, actionNote:'', resubmitPhotos:[], resubmitAttached:null, assignTechs:[''], assignStartDate:'', assignEndDate:'', assignReceivedBy:'', assignExecutionPlan:'', maintRecordFor:null, maintRecordCause:'', maintRecordOpinion:'', maintRecordParts:[emptyPartRow()], opinionStepFor:null, opinionStepKey:'', opinionStepDate:'', opinionStepNote:'', editNeededFor:null, editNeededDate:'', editNeededUrgent:false, editTechsFor:null, editTechs:[], newWebhookRole:'fm', newWebhookUrl:'', resetConfirming:false, resetConfirmText:'',
     reqName:'', reqDept:'', reqRole:'requester', reqTechName:'', reqNote:'', deviceIdInput:'', deviceIdTried:false, connTest:null, lineTest:null, testSend:null, testSendRole:'admin',
     grantRole:{}, grantTechName:{}, grantLineUserId:{},
     editingAccessId:null, editRole:{}, editTechName:{}, editLineUserId:{},
@@ -572,7 +576,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-08.2';
+const APP_VERSION = '2026-09-09.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1274,6 +1278,14 @@ function assignedTechs(o){
   if(o.assignment.technician) return [o.assignment.technician];
   return [];
 }
+/* ชื่อช่างแบบย่อสำหรับป้ายบนการ์ดในหน้ารายการ — ยาวเกินสองชื่อก็ตัดเป็น "+N"
+   ชื่อช่างในระบบยาว (เช่น 'ช่างสมชาย (ไฟฟ้า)') สามชื่อต่อกันจะดันแถบสถานะจนอ่านไม่ออกบนมือถือ
+   รายชื่อครบอยู่ในหน้ารายละเอียดอยู่แล้ว ป้ายนี้มีไว้ให้ "รู้ว่าใบนี้ของใคร" ตั้งแต่หน้ารายการ */
+function techPillText(o){
+  const t = assignedTechs(o);
+  if(!t.length) return '';
+  return t.length <= 2 ? t.join(', ') : `${t[0]}, ${t[1]} +${t.length - 2}`;
+}
 function nowIso(){ return new Date().toISOString(); }
 function fmtDateTime(iso){
   const d = new Date(iso);
@@ -1414,6 +1426,7 @@ const SUBMIT_LABELS = {
   confirmAction:            'กำลังส่งข้อมูล...',
   saveNeededDate:           'กำลังบันทึกการแก้ไข...',
   assignTechnician:         'กำลังมอบหมายงาน...',
+  saveEditTechs:            'กำลังบันทึกการเปลี่ยนช่าง...',
   startRepair:              'กำลังอัปเดตสถานะ...',
   finishRepair:             'กำลังอัปเดตสถานะ...',
   saveMaintRecord:          'กำลังบันทึกข้อมูลซ่อมบำรุง...',
@@ -2336,6 +2349,7 @@ async function openDetail(id){
   state.view = 'detail';
   state.ui.actionFor = null; state.ui.actionType = null; state.ui.actionNote='';
   state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
+  state.ui.editTechsFor = null; state.ui.editTechs = [];
   state.detailPhotos = [];   // ล้างรูปของใบก่อนหน้าก่อนเสมอ ไม่งั้นจะค้างโผล่บนใบใหม่ชั่วครู่
   // mark related notifications read for current role (admin: all roles' notifications for this order)
   // ทำเครื่องหมาย "อ่านแล้ว" ในหน่วยความจำก่อน เพื่อให้ตัวเลขบนกระดิ่งลดทันทีที่กด
@@ -2362,6 +2376,7 @@ async function openDetail(id){
 function backToList(){
   state.view='list'; state.selectedOrderId=null;
   state.ui.editNeededFor = null; state.ui.editNeededDate = ''; state.ui.editNeededUrgent = false;
+  state.ui.editTechsFor = null; state.ui.editTechs = [];
   render();
 }
 function getOrder(id){ return state.orders.find(o => o.id === id); }
@@ -2616,9 +2631,109 @@ async function resubmitInfo(id, note){
   toast('ส่งข้อมูลเพิ่มเติมแล้ว รอการอนุมัติอีกครั้ง');
   closeActionBox();
 }
+/* ตัวเลือกช่างในดรอปดาวน์ — คำนวณ "ใครมี LINE" ครั้งเดียวแล้วคืนฟังก์ชันสร้าง <option> ต่อแถว
+   (techHasLine() ต้องไล่หา userId ใหม่ทุกครั้งที่เรียก จึงไม่ควรเรียกซ้ำในลูปทุกแถว) */
+function makeTechOptions(){
+  const techs = state.config.technicians || [];
+  const hasLine = {};
+  techs.forEach(t => { hasLine[t] = techHasLine(t); });
+  return (val) => techs.map(t =>
+    `<option value="${escapeHtml(t)}" ${val === t ? 'selected' : ''}>${escapeHtml(t)}${hasLine[t] ? '' : ' — ไม่มี LINE'}</option>`).join('');
+}
+/* แถวเลือกช่าง (ดรอปดาวน์ + ปุ่มลบแถว) — ใช้ร่วมกันทั้งตอนมอบหมายครั้งแรกและตอนเปลี่ยนช่างทีหลัง
+   เขียนไว้ที่เดียวเพื่อไม่ให้สองหน้าจอนี้หลุดจากกัน (เช่นป้าย "ไม่มี LINE" มีแค่ฝั่งเดียว) */
+function techPickerRows(vals, setFn, removeFn){
+  const optionsFor = makeTechOptions();
+  return vals.map((val, i) => `
+      <div class="inline-form" style="margin-bottom:6px;">
+        <select class="input" onchange="${setFn}(${i}, this.value)">
+          <option value="">-- เลือกช่าง --</option>
+          ${optionsFor(val)}
+        </select>
+        ${vals.length > 1 ? `<button class="btn btn-outline btn-sm" onclick="${removeFn}(${i})">✕</button>` : ''}
+      </div>`).join('');
+}
 function addAssignTechRow(){ state.ui.assignTechs.push(''); render(); }
 function removeAssignTechRow(i){ state.ui.assignTechs.splice(i,1); render(); }
 function setAssignTech(i, v){ state.ui.assignTechs[i] = v; }
+
+/* ============================= เปลี่ยนช่างผู้รับผิดชอบหลังมอบหมายไปแล้ว ============================= */
+/* ผจก.แผนกซ่อมบำรุง (และ admin ผ่าน hasRole) เปลี่ยนช่างผู้รับผิดชอบของใบที่มอบหมายไปแล้วได้
+   หน้างานจริงคนเปลี่ยนได้เสมอ — ช่างลาป่วย งานกลายเป็นงานไฟฟ้าไม่ใช่งานเครื่องกล หรือเลือกผิดคน
+   ตั้งแต่แรก เดิมมอบหมายแล้วแก้ไม่ได้เลย ทางออกเดียวคือให้ช่างคนเดิมกดปุ่มแทนคนที่ทำจริง
+   ซึ่งทำให้ทั้งชื่อในใบและสิทธิ์แก้บันทึกข้อมูลซ่อมบำรุงผิดคนไปทั้งใบ
+   ไม่ล็อกตามสถานะใบ (ยกเว้นใบที่ไม่อนุมัติ ซึ่งไม่เคยมีช่าง) ด้วยเหตุผลเดียวกับ canEditMaintRecord()
+   คือชื่อที่บันทึกผิดมักรู้ตัวหลังปิดงานไปแล้ว และการแก้ให้ตรงความจริงย่อมดีกว่าปล่อยผิดค้างไว้ */
+function canReassignTechs(o){
+  return hasRole('maint') && assignedTechs(o).length > 0 && o.status !== 'REJECTED';
+}
+function openEditTechs(id){
+  const o = getOrder(id); if(!o) return;
+  if(!canReassignTechs(o)){ toast('ท่านไม่มีสิทธิ์เปลี่ยนช่างผู้รับผิดชอบของใบนี้', true); return; }
+  state.ui.editTechsFor = id;
+  state.ui.editTechs = assignedTechs(o).slice();
+  render();
+}
+function cancelEditTechs(){
+  state.ui.editTechsFor = null; state.ui.editTechs = [];
+  render();
+}
+function addEditTechRow(){ state.ui.editTechs.push(''); render(); }
+function removeEditTechRow(i){ state.ui.editTechs.splice(i,1); render(); }
+function setEditTech(i, v){ state.ui.editTechs[i] = v; }
+async function saveEditTechs(id){
+  const o = getOrder(id); if(!o) return;
+  if(!canReassignTechs(o)){ toast('ท่านไม่มีสิทธิ์เปลี่ยนช่างผู้รับผิดชอบของใบนี้', true); return; }
+  if(!state.ordersLoaded){ toast('กำลังโหลดข้อมูลระบบ กรุณารอสักครู่แล้วลองใหม่', true); return; }
+  const next = [...new Set(state.ui.editTechs.filter(Boolean))];
+  if(!next.length){ toast('ต้องมีช่างผู้รับผิดชอบอย่างน้อย 1 คน', true); return; }
+  const prevTechs = assignedTechs(o);
+  const added = next.filter(t => !prevTechs.includes(t));
+  const removed = prevTechs.filter(t => !next.includes(t));
+  const kept = next.filter(t => prevTechs.includes(t));
+  // สลับลำดับชื่อเฉยๆ ไม่นับเป็นการเปลี่ยนตัว — ไม่ต้องเขียนประวัติหรือยิงแจ้งเตือนให้ใครเปล่าๆ
+  if(!added.length && !removed.length){ toastPlain('ไม่มีการเปลี่ยนแปลง'); cancelEditTechs(); return; }
+
+  const changed = [];
+  if(added.length) changed.push('เพิ่ม ' + added.join(', '));
+  if(removed.length) changed.push('นำออก ' + removed.join(', '));
+  const editor = currentEditorName();
+  const note = `เปลี่ยนช่างผู้รับผิดชอบโดย ${editor}: ${prevTechs.join(', ')} → ${next.join(', ')} (${changed.join(' • ')})`;
+
+  // เก็บค่าเดิมทั้งชุดไว้คืนกลับ ถ้าเขียนลงเซิร์ฟเวอร์ไม่สำเร็จ — ห้ามให้หน้าจอค้างอยู่กับชื่อช่างใหม่
+  // ที่ยังไม่เข้าฐานข้อมูลจริง เพราะสิทธิ์กดปุ่มเริ่ม/จบงานและสิทธิ์แก้บันทึกฯ ผูกอยู่กับรายชื่อนี้
+  const prevAssignment = o.assignment;
+  // ทิ้ง assignment.technician (สตริงเดี่ยวรุ่นเก่า) ไปพร้อมกัน — ใบยุคแรกที่ยังมีฟิลด์นี้ค้างอยู่
+  // ถ้าปล่อยไว้จะเหลือชื่อช่างคนเก่าค้างคู่กับ technicians ชุดใหม่ในใบเดียวกัน = ข้อมูลสองชุดที่ขัดกันเอง
+  // ทุกคนที่อ่านอยู่ตอนนี้ (assignedTechs() และกระจกฝั่ง Apps Script) อ่าน technicians ก่อนอยู่แล้ว
+  // จึงยังไม่มีใครหยิบค่าที่ค้างไปใช้ผิด แต่ฟิลด์ที่โกหกและไม่มีใครอัปเดตคือกับดักรอคนอ่านคนถัดไป
+  // (assignTechnician() เขียนทับ assignment ทั้งก้อนอยู่แล้ว ใบยุคหลังจึงไม่เคยมีฟิลด์นี้ติดมา)
+  const { technician, ...restAssignment } = o.assignment;
+  o.assignment = { ...restAssignment, technicians: next, reassignedBy: editor, reassignedAt: nowIso() };
+  o.statusHistory.push({ status: o.status, at: nowIso(), note });
+  if(!await persistOrderChange(() => { o.assignment = prevAssignment; o.statusHistory.pop(); },
+      'เปลี่ยนช่างผู้รับผิดชอบไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง')) return;
+
+  const jobLine = `${o.machineCode} — ${o.machineName}`;
+  const teamLine = `ช่างผู้รับผิดชอบใบนี้ตอนนี้: ${next.join(', ')}`;
+  await Promise.all([
+    notifyOrderRequester(o, `เปลี่ยนช่างผู้รับผิดชอบงานซ่อมของท่านเป็น ${next.join(', ')} แล้ว`),
+    // คนที่เพิ่งถูกใส่เข้ามาต้องได้รายละเอียดงานครบเหมือนตอนมอบหมายครั้งแรก — เขายังไม่เคยเห็นใบนี้
+    ...added.map(tech => notifyTech(o, tech,
+      `คุณได้รับมอบหมายงานซ่อม (${jobLine}) กำหนดงาน ${fmtDate(o.assignment.startDate)} - ${fmtDate(o.assignment.endDate)}`,
+      `[${o.docNumber}] คุณได้รับมอบหมายงานซ่อม\nแผนก: ${o.department}\nเครื่องจักร: ${jobLine}\nอาการ/รายละเอียด: ${o.cause}\nกำหนดงาน: ${fmtDate(o.assignment.startDate)} - ${fmtDate(o.assignment.endDate)}\n${orderDeepLink(o.id, 'tech')}`)),
+    // คนที่ถูกถอดออกต้องรู้ว่าไม่ต้องทำต่อแล้ว ไม่งั้นจะไปโผล่หน้างานซ้ำกับคนใหม่
+    ...removed.map(tech => notifyTech(o, tech,
+      `ท่านถูกถอดออกจากงานซ่อม (${jobLine}) แล้ว — ไม่ต้องดำเนินการต่อ`,
+      `[${o.docNumber}] ท่านถูกถอดออกจากงานซ่อมนี้แล้ว ไม่ต้องดำเนินการต่อ\nแผนก: ${o.department}\nเครื่องจักร: ${jobLine}\n${teamLine}\n${orderDeepLink(o.id, 'tech')}`)),
+    // คนที่ยังอยู่ในใบเดิมต้องรู้ว่าตอนนี้ทำงานคู่กับใคร — งานที่เคยแบ่งกันไว้เปลี่ยนมือไปแล้ว
+    ...kept.map(tech => notifyTech(o, tech,
+      `ทีมช่างของงานซ่อม (${jobLine}) เปลี่ยนแปลง — ${changed.join(' • ')}`,
+      `[${o.docNumber}] ทีมช่างของงานซ่อมนี้เปลี่ยนแปลง\nเครื่องจักร: ${jobLine}\n${changed.join(' • ')}\n${teamLine}\n${orderDeepLink(o.id, 'tech')}`)),
+  ]);
+  toast('เปลี่ยนช่างผู้รับผิดชอบเรียบร้อย');
+  cancelEditTechs();
+}
 async function assignTechnician(id){
   const o = getOrder(id); if(!o) return;
   const techs = [...new Set(state.ui.assignTechs.filter(Boolean))];
@@ -2708,8 +2823,9 @@ function canEditMaintRecord(o){
   return state.role === 'tech' && assignedTechs(o).includes(state.myTechName);
 }
 /* ชื่อที่จะบันทึกไว้ว่า "ใครแก้" — ช่างใช้ชื่อช่างของตัวเอง ไม่ใช่ชื่อบทบาท
-   (เดิม updatedBy ฝัง ROLES.maint.label ตายตัว ซึ่งตอนนี้จะโกหกทุกครั้งที่ช่างเป็นคนแก้) */
-function maintRecordEditorName(){
+   (เดิม updatedBy ฝัง ROLES.maint.label ตายตัว ซึ่งตอนนี้จะโกหกทุกครั้งที่ช่างเป็นคนแก้)
+   ใช้ร่วมกันทั้งบันทึกข้อมูลซ่อมบำรุงและการเปลี่ยนช่างผู้รับผิดชอบ */
+function currentEditorName(){
   return state.myTechName || state.myName || (ROLES[state.role] ? ROLES[state.role].label : '');
 }
 /* สรุปว่าการกดบันทึกครั้งนี้เปลี่ยนอะไรไปบ้าง — ใช้ทั้งใน "ลำดับเหตุการณ์" และในข้อความแจ้งเตือน
@@ -2735,7 +2851,7 @@ async function saveMaintRecord(id){
   const changes = maintRecordChanges(prevRecord, next);
   // ไม่มีอะไรเปลี่ยน = ไม่ได้ส่งอะไรขึ้นเซิร์ฟเวอร์เลย จึงต้องไม่ไปขึ้นกล่อง ✓ "ส่งข้อมูลเรียบร้อย"
   if(!changes.length){ toastPlain('ไม่มีการเปลี่ยนแปลงของบันทึกข้อมูลซ่อมบำรุง'); closeMaintRecord(); return; }
-  const by = maintRecordEditorName();
+  const by = currentEditorName();
   const histLen = o.statusHistory.length;
   const prevOpinion = progressTrackOf(o), prevLabel = progressTrackLabel(o);
   o.maintRecord = { ...next, updatedBy: by, updatedAt: nowIso() };
@@ -3235,6 +3351,13 @@ function renderList(){
       : opStep
         ? `<span class="status-pill" style="color:#2a6f97; background:#e4f0f7;">${escapeHtml(progressTrackLabel(o))}: ${escapeHtml(opStep.doneLabel)}</span>`
         : '';
+    // ป้ายช่างผู้รับผิดชอบ — อยู่แถบเดียวกับสถานะ เพราะ "ใบนี้ของใคร" เป็นคำถามที่ถูกถามพร้อมกับ
+    // "ใบนี้ถึงไหนแล้ว" เสมอ เดิมต้องกดเข้าไปดูรายละเอียดทีละใบถึงจะรู้ว่าใครถือใบไหนอยู่
+    // ใบที่ยังไม่มอบหมายไม่ต้องมีป้าย — สถานะ "รอมอบหมายช่าง" บอกอยู่แล้ว
+    const techName = techPillText(o);
+    const techPill = techName
+      ? `<span class="status-pill tech-pill" style="color:#2F8F6B; background:#e6f3ee;">🧰 ${escapeHtml(techName)}</span>`
+      : '';
     return `
     <div class="order-card" style="border-left-color:${meta.color}">
       <div class="order-top">
@@ -3245,6 +3368,7 @@ function renderList(){
         </div>
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
           ${o.urgent ? `<span class="urgent-pill">🚨 ด่วน</span>` : ''}
+          ${techPill}
           ${opPill}
           <span class="status-pill" style="color:${meta.color}; background:${meta.bg};">${meta.label}</span>
         </div>
@@ -3332,6 +3456,25 @@ function renderDetail(){
   } else {
     neededDateCell = fmtDate(o.neededDate) + urgentBadge +
       (state.role === 'admin' ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="openEditNeededDate('${o.id}')">✎ แก้ไข</button>` : '');
+  }
+
+  // ช่อง "ช่างผู้รับผิดชอบ" — ผจก.แผนกซ่อมบำรุง (และ admin) กดเปลี่ยนตัวช่างได้ในที่ ดู canReassignTechs()
+  // ต้องรอ ordersLoaded เหมือนปุ่มอื่นที่เขียนกลับเซิร์ฟเวอร์ ไม่งั้นจะบันทึกทับใบอื่นที่ยังโหลดไม่มา
+  const canReassign = state.ordersLoaded && canReassignTechs(o);
+  const techListText = assignedTechs(o).length ? assignedTechs(o).map(escapeHtml).join(', ') : '—';
+  let techCell;
+  if(canReassign && state.ui.editTechsFor === o.id){
+    techCell = `
+      ${techPickerRows(state.ui.editTechs, 'setEditTech', 'removeEditTechRow')}
+      <button class="btn btn-outline btn-sm" onclick="addEditTechRow()">+ เพิ่มช่าง</button>
+      <p class="desc" style="margin:8px 0 0;">ช่างที่ถูกนำออกจะหมดสิทธิ์กดเริ่ม/จบงานและแก้บันทึกข้อมูลซ่อมบำรุงของใบนี้ ระบบจะแจ้งเตือนทั้งช่างคนเดิม ช่างคนใหม่ และผู้แจ้งซ่อมให้อัตโนมัติ</p>
+      <div class="order-actions" style="margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveEditTechs('${o.id}')" ${submitAttr()}>${submitText('saveEditTechs', 'บันทึกการเปลี่ยนช่าง', 'กำลังบันทึก...')}</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelEditTechs()">ยกเลิก</button>
+      </div>`;
+  } else {
+    techCell = techListText +
+      (canReassign ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="openEditTechs('${o.id}')">✎ เปลี่ยนช่าง</button>` : '');
   }
 
   // "รออะไรอยู่" — โชว์คู่กับสถานะใบทั้งที่หัวใบ กล่องของช่าง และการ์ดในหน้ารายการ
@@ -3424,19 +3567,7 @@ function renderDetail(){
       ${noteBox()}
     </div>`;
   } else if(hasRole('maint') && o.status==='PENDING_ASSIGN'){
-    // คำนวณครั้งเดียวนอกลูป — ใช้ทั้งติดป้ายในดรอปดาวน์และเตือนใต้รายการ
-    const techLine = {};
-    (state.config.technicians || []).forEach(t => { techLine[t] = techHasLine(t); });
-    const techOptionsFor = (val) => (state.config.technicians || []).map(t =>
-      `<option value="${escapeHtml(t)}" ${val === t ? 'selected' : ''}>${escapeHtml(t)}${techLine[t] ? '' : ' — ไม่มี LINE'}</option>`).join('');
-    const rows = state.ui.assignTechs.map((val, i) => `
-      <div class="inline-form" style="margin-bottom:6px;">
-        <select class="input" onchange="setAssignTech(${i}, this.value)">
-          <option value="">-- เลือกช่าง --</option>
-          ${techOptionsFor(val)}
-        </select>
-        ${state.ui.assignTechs.length>1 ? `<button class="btn btn-outline btn-sm" onclick="removeAssignTechRow(${i})">✕</button>` : ''}
-      </div>`).join('');
+    const rows = techPickerRows(state.ui.assignTechs, 'setAssignTech', 'removeAssignTechRow');
 
     actionBox = `
     <div class="action-box">
@@ -3640,7 +3771,7 @@ function renderDetail(){
       <div class="kv"><div class="k">ผู้แจ้ง</div><div class="v">${escapeHtml(o.requestedBy)}</div></div>
       <div class="kv"><div class="k">วันที่ต้องการใช้งาน</div><div class="v">${neededDateCell}</div></div>
       <div class="kv"><div class="k">แจ้งเมื่อ</div><div class="v">${fmtDateTime(o.createdAt)}</div></div>
-      <div class="kv"><div class="k">ช่างผู้รับผิดชอบ</div><div class="v">${assignedTechs(o).length ? assignedTechs(o).map(escapeHtml).join(', ') : '—'}</div></div>
+      <div class="kv"><div class="k">ช่างผู้รับผิดชอบ</div><div class="v">${techCell}</div></div>
       ${o.assignment.receivedByName ? `<div class="kv"><div class="k">ผู้รับใบแจ้งซ่อม</div><div class="v">${escapeHtml(o.assignment.receivedByName)}</div></div>` : ''}
       ${o.assignment.startDate ? `<div class="kv"><div class="k">วันที่เริ่มงาน</div><div class="v">${fmtDate(o.assignment.startDate)}</div></div>` : ''}
       ${o.assignment.endDate ? `<div class="kv"><div class="k">กำหนดการดำเนินงานเสร็จสิ้น</div><div class="v">${fmtDate(o.assignment.endDate)}</div></div>` : ''}

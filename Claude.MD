@@ -772,11 +772,16 @@ per-name routing described above. Order data shape changed:
 `order.assignment.technician` (single string) → `order.assignment.technicians`
 (array of strings). `assignedTechs(o)` in `index.html` reads either shape
 so orders assigned before this change still display correctly.
-The Apps Script "คำร้องแจ้งซ่อม" mirror code (not in this repo) still
-reads the old singular `technician` field for the "ช่างผู้รับผิดชอบ"
-column in the ใบแจ้งซ่อม sheet tab — it needs to be updated by hand to
-read `technicians` (joined with a comma), with a fallback to the old
-`technician` field for historical rows.
+The Apps Script "คำร้องแจ้งซ่อม" mirror code (not in this repo) needed a
+hand edit to match, for the "ช่างผู้รับผิดชอบ" column in the ใบแจ้งซ่อม sheet
+tab. **That was done** (confirmed in the Apps Script editor, 9 Sep 2026) — it
+now builds `techsList` from `assignment.technicians` joined with `, ` and falls
+back to the old singular `assignment.technician` for historical rows. Nothing
+is outstanding here; this paragraph used to say the opposite and was simply
+never updated after the fix, which is exactly how a stale doc turns into a
+wrong instruction later. If the column ever looks empty for a recently
+assigned order, the source is fine and the deployment is the suspect: Deploy →
+Manage deployments → New version.
 Added a dedicated `tech` app role (label "ช่าง") to `ROLES` in
 `index.html` — this is the role a technician's own LINE account would
 hold in `สิทธิ์ผู้ใช้ LINE` to log into the app themselves (distinct from
@@ -1013,3 +1018,66 @@ client-side.
 Note the `บันทึกข้อผิดพลาด` tab and the KV rows are migrated historical
 data — timestamps there predating the migration prove nothing about
 whether the current deployment works. Check the live endpoint, not the tab.
+
+Who is on a job, visible from the list (9 Sep 2026)
+The order card in รายการแจ้งซ่อม now carries a green 🧰 pill with the assigned
+technicians, in the same right-hand bar as the 🚨 ด่วน flag, the ⏳ waiting pill
+and the status pill (`techPillText()` + the `.tech-pill` class in
+`index.html`). "ใบนี้ของใคร" and "ใบนี้ถึงไหนแล้ว" are asked together on the
+floor, and before this the first one could only be answered by opening every
+order one at a time. Notes:
+orders with no technician yet get no pill at all — the status already reads
+รอมอบหมายช่าง, so a second "ยังไม่มอบหมาย" badge would be noise;
+`techPillText()` prints at most two names and then `+N`. Technician names in
+this system are long (`ช่างสมชาย (ไฟฟ้า)`), and three of them joined would push
+the status bar past the width of a phone. The full list is on the detail page.
+`.tech-pill` also caps the pill at the container width and ellipsises the
+overflow, so a single very long name can't widen the card either.
+
+Changing the assigned technician after assignment (9 Sep 2026)
+`maint` (so `admin` too, via `hasRole`) can now change an order's technicians
+after it has been assigned — `canReassignTechs()` / `openEditTechs()` /
+`saveEditTechs()` in `index.html`, edited in place in the ช่างผู้รับผิดชอบ field
+of the detail page behind a `✎ เปลี่ยนช่าง` button, in the same style as the
+admin's `✎ แก้ไข` on วันที่ต้องการใช้งาน. Assignment used to be write-once: a
+technician off sick, a job that turns out to be electrical rather than
+mechanical, or simply the wrong name picked, all left one workaround — the
+technician on the order pressing the buttons for whoever actually did the work.
+That put the wrong name on the document *and* gave the wrong person the right
+to edit บันทึกข้อมูลซ่อมบำรุง (`canEditMaintRecord()` is keyed off
+`assignedTechs(o)`), for the whole life of the order. Notes:
+the gate is `hasRole('maint')` plus "the order has technicians" plus "not
+REJECTED". It is deliberately **not** gated on the workflow status, for the
+same reason `canEditMaintRecord()` isn't: a wrong name is usually noticed after
+the job is closed, and a correction is worth more than a frozen mistake. A
+rejected order never reached assignment, so that branch is only a guard;
+the assign screen and this editor share one technician picker,
+`techPickerRows()` (built on `makeTechOptions()`, which resolves "has this
+person a LINE id" once per render rather than once per row). Keep both callers
+on it — the two screens drifting apart is how one of them ends up without the
+`— ไม่มี LINE` labels;
+`saveEditTechs()` computes added/removed/kept and notifies all three groups
+plus the requester: newcomers get the full job brief (the same text
+`assignTechnician()` sends, since they have never seen the order), removed
+technicians get an explicit "ไม่ต้องดำเนินการต่อ" so they don't show up on site
+next to the new person, and the ones still on the order are told who they are
+now working with. Reordering the same names is not a change: the save is a
+no-op with no history line and no pings;
+it writes `assignment.reassignedBy`/`.reassignedAt` and appends the diff to
+`statusHistory` with the order's *current* status, so the change is auditable
+in ลำดับเหตุการณ์ without moving the order anywhere in the workflow — the same
+contract as `saveNeededDate()`. `currentEditorName()` (renamed from
+`maintRecordEditorName()`, now that two features share it) names the actual
+person in that line, not the role label;
+it also drops the legacy singular `assignment.technician` field while
+rewriting the list. Nothing reads that field first any more — `assignedTechs()`
+and the sheet mirror both prefer `technicians` — so this is hygiene, not a bug
+fix: an order carrying both a stale single name and a current array is two
+contradictory answers to one question, kept alive by nobody. `assignTechnician()`
+never had the problem because it replaces the whole `assignment` object;
+on a failed write everything rolls back — technicians, the dropped legacy
+field, and the history line — and the editor stays open, per the rule already
+spelled out for `saveNeededDate()`. Note the rollback restores the whole
+previous `assignment` object rather than patching fields back one by one;
+`saveEditTechs` is registered in `SUBMIT_LABELS`. Every new write button has
+to be, or it gets neither the double-click guard nor the spinner.
