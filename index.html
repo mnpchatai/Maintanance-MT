@@ -2703,9 +2703,11 @@ async function saveEditTechs(id){
   // เก็บค่าเดิมทั้งชุดไว้คืนกลับ ถ้าเขียนลงเซิร์ฟเวอร์ไม่สำเร็จ — ห้ามให้หน้าจอค้างอยู่กับชื่อช่างใหม่
   // ที่ยังไม่เข้าฐานข้อมูลจริง เพราะสิทธิ์กดปุ่มเริ่ม/จบงานและสิทธิ์แก้บันทึกฯ ผูกอยู่กับรายชื่อนี้
   const prevAssignment = o.assignment;
-  // ทิ้ง assignment.technician (สตริงเดี่ยวรุ่นเก่า) ไปพร้อมกัน — ใบเก่าที่ยังมีฟิลด์นี้ค้างอยู่
-  // จะทำให้กระจกฝั่ง Apps Script ซึ่งยังอ่านฟิลด์เดี่ยว โชว์ชื่อช่างคนเดิมในชีตต่อไปทั้งที่เปลี่ยนตัวแล้ว
-  // (assignTechnician() เขียนทับ assignment ทั้งก้อนอยู่แล้ว จึงไม่เคยมีปัญหานี้)
+  // ทิ้ง assignment.technician (สตริงเดี่ยวรุ่นเก่า) ไปพร้อมกัน — ใบยุคแรกที่ยังมีฟิลด์นี้ค้างอยู่
+  // ถ้าปล่อยไว้จะเหลือชื่อช่างคนเก่าค้างคู่กับ technicians ชุดใหม่ในใบเดียวกัน = ข้อมูลสองชุดที่ขัดกันเอง
+  // ทุกคนที่อ่านอยู่ตอนนี้ (assignedTechs() และกระจกฝั่ง Apps Script) อ่าน technicians ก่อนอยู่แล้ว
+  // จึงยังไม่มีใครหยิบค่าที่ค้างไปใช้ผิด แต่ฟิลด์ที่โกหกและไม่มีใครอัปเดตคือกับดักรอคนอ่านคนถัดไป
+  // (assignTechnician() เขียนทับ assignment ทั้งก้อนอยู่แล้ว ใบยุคหลังจึงไม่เคยมีฟิลด์นี้ติดมา)
   const { technician, ...restAssignment } = o.assignment;
   o.assignment = { ...restAssignment, technicians: next, reassignedBy: editor, reassignedAt: nowIso() };
   o.statusHistory.push({ status: o.status, at: nowIso(), note });

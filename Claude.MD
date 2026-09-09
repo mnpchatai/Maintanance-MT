@@ -772,11 +772,16 @@ per-name routing described above. Order data shape changed:
 `order.assignment.technician` (single string) → `order.assignment.technicians`
 (array of strings). `assignedTechs(o)` in `index.html` reads either shape
 so orders assigned before this change still display correctly.
-The Apps Script "คำร้องแจ้งซ่อม" mirror code (not in this repo) still
-reads the old singular `technician` field for the "ช่างผู้รับผิดชอบ"
-column in the ใบแจ้งซ่อม sheet tab — it needs to be updated by hand to
-read `technicians` (joined with a comma), with a fallback to the old
-`technician` field for historical rows.
+The Apps Script "คำร้องแจ้งซ่อม" mirror code (not in this repo) needed a
+hand edit to match, for the "ช่างผู้รับผิดชอบ" column in the ใบแจ้งซ่อม sheet
+tab. **That was done** (confirmed in the Apps Script editor, 9 Sep 2026) — it
+now builds `techsList` from `assignment.technicians` joined with `, ` and falls
+back to the old singular `assignment.technician` for historical rows. Nothing
+is outstanding here; this paragraph used to say the opposite and was simply
+never updated after the fix, which is exactly how a stale doc turns into a
+wrong instruction later. If the column ever looks empty for a recently
+assigned order, the source is fine and the deployment is the suspect: Deploy →
+Manage deployments → New version.
 Added a dedicated `tech` app role (label "ช่าง") to `ROLES` in
 `index.html` — this is the role a technician's own LINE account would
 hold in `สิทธิ์ผู้ใช้ LINE` to log into the app themselves (distinct from
@@ -1065,11 +1070,11 @@ contract as `saveNeededDate()`. `currentEditorName()` (renamed from
 `maintRecordEditorName()`, now that two features share it) names the actual
 person in that line, not the role label;
 it also drops the legacy singular `assignment.technician` field while
-rewriting the list. The Apps Script mirror still reads that field for the
-ช่างผู้รับผิดชอบ column (see the note further up), so leaving a stale value
-behind would keep showing the *old* technician in the sheet after a
-reassignment. `assignTechnician()` never had this problem because it replaces
-the whole `assignment` object;
+rewriting the list. Nothing reads that field first any more — `assignedTechs()`
+and the sheet mirror both prefer `technicians` — so this is hygiene, not a bug
+fix: an order carrying both a stale single name and a current array is two
+contradictory answers to one question, kept alive by nobody. `assignTechnician()`
+never had the problem because it replaces the whole `assignment` object;
 on a failed write everything rolls back — technicians, the dropped legacy
 field, and the history line — and the editor stays open, per the rule already
 spelled out for `saveNeededDate()`. Note the rollback restores the whole
