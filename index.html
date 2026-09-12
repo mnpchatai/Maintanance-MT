@@ -576,7 +576,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-12.1';
+const APP_VERSION = '2026-09-12.2';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -589,11 +589,24 @@ const APP_VERSION = '2026-09-12.1';
 
    กติกาความปลอดภัยของสำเนานี้ — ห้ามผ่อน:
    - คำตอบจากเซิร์ฟเวอร์ชนะสำเนาเสมอ ถ้าเช็คสิทธิ์แล้วพบว่าไม่มีสิทธิ์จริง จะล้างสำเนาแล้วรีโหลดทันที
-   - สำเนาผูกกับ deviceId + APP_VERSION และหมดอายุใน 7 วัน คนละเครื่อง/คนละเวอร์ชันใช้ต่อไม่ได้
+   - สำเนาผูกกับ deviceId + SNAPSHOT_SCHEMA และหมดอายุใน 7 วัน คนละเครื่อง/คนละโครงสร้างใช้ต่อไม่ได้
    - สำเนาใช้ "แสดงผล" เท่านั้น ไม่ปลดล็อกการเขียนกลับ — state.ordersLoaded/state.loaded ยังคงเป็น true
      เฉพาะเมื่อโหลดจากเซิร์ฟเวอร์สำเร็จจริง ปุ่มที่ต้องบันทึกทับ orders ทั้งก้อนจึงยังถูกล็อกไว้เหมือนเดิม
      (ดู persistOrders) ไม่งั้นจะเขียนข้อมูลเก่าทับของใหม่บนเซิร์ฟเวอร์ */
 const SNAPSHOT_KEY = 'mtSnapshot';
+/* เวอร์ชัน "โครงสร้างข้อมูลในสำเนา" — แยกออกจาก APP_VERSION โดยตั้งใจ
+   เดิมสำเนาผูกกับ APP_VERSION ซึ่งกฎของโปรเจกต์บังคับให้ขยับทุกครั้งที่แก้ index.html (ดูคอมเมนต์
+   ที่ checkForUpdate) ผลคือ deploy ที่แก้แค่ข้อความหรือลิงก์ ก็ล้างสำเนาของผู้ใช้ "ทุกเครื่อง" ทิ้ง
+   ทั้งที่ข้อมูลในนั้นยังใช้ได้ดีอยู่ ทุกคนจึงต้องไปรอคิว Apps Script ใหม่ในการเปิดแอปครั้งถัดไป
+   = อาการ "อยู่ๆ ก็โหลดช้ากว่าเดิม" ที่เจอทุกครั้งหลังอัปเดต ทั้งที่ระบบสำเนามีไว้แก้ปัญหานี้พอดี
+   ตอนนี้ APP_VERSION ยังขยับทุก deploy เหมือนเดิม (แท็บเก่าต้องรู้ว่ามีโค้ดใหม่) แต่ไม่ไปแตะสำเนาแล้ว
+
+   **ขยับเลขนี้เมื่อ "รูปร่าง" ของก้อนที่ saveSnapshot() เขียนเปลี่ยนเท่านั้น** เช่น เพิ่ม/ลบ/เปลี่ยนชื่อ
+   ฟิลด์ใน auth (allowedRoles/techIdentities/myName/role) หรือเปลี่ยนความหมายของ config/counters/
+   orders/notifications จนโค้ดใหม่อ่านของเก่าแล้วเพี้ยน — ถ้าลืมขยับตอนที่ควรขยับ ผู้ใช้จะเห็นหน้าจอ
+   ที่วาดจากข้อมูลรูปแบบเก่าราวหนึ่งถึงสามวินาที ก่อนของสดจากเซิร์ฟเวอร์จะมาวาดทับ (ไม่ถึงขั้นเขียน
+   ข้อมูลผิดลงเซิร์ฟเวอร์ เพราะสำเนาไม่ปลดล็อก state.loaded/state.ordersLoaded — ดูกติกาด้านบน) */
+const SNAPSHOT_SCHEMA = 1;
 const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;   // 7 วัน
 const SNAPSHOT_MAX_BYTES = 2500000;                  // กันเขียนจนเต็มโควตา localStorage (~5MB)
 const SNAPSHOT_MIN_GAP = 20000;                      // เขียนถี่สุดทุก 20 วิ — การ stringify orders ทั้งก้อนไม่ฟรี
@@ -602,7 +615,7 @@ function readSnapshot(){
     const raw = localStorage.getItem(SNAPSHOT_KEY);
     if(!raw) return null;
     const s = JSON.parse(raw);
-    if(!s || s.v !== APP_VERSION) return null;
+    if(!s || s.v !== SNAPSHOT_SCHEMA) return null;
     if(!s.at || Date.now() - s.at > SNAPSHOT_MAX_AGE) return null;
     return s;
   }catch(e){ return null; }
@@ -618,7 +631,7 @@ function saveSnapshot(force){
   if(!force && Date.now() - snapshotLastWrite < SNAPSHOT_MIN_GAP) return;
   try{
     const payload = JSON.stringify({
-      v: APP_VERSION,
+      v: SNAPSHOT_SCHEMA,
       at: Date.now(),
       deviceId: state.deviceId,
       auth: {
