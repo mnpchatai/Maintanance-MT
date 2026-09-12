@@ -320,6 +320,9 @@ refresh prompt. That is how a fix can be live and still "ยังเหมื�
 `render()` also prints the running `APP_VERSION` at the foot of the page
 (`.app-version`), which is what tells you whether a phone is on the new code
 at all before you debug anything else.
+Bumping it is cheap now: it no longer invalidates the local snapshot (that is
+`SNAPSHOT_SCHEMA`'s job — see "Local snapshot" below), so a routine deploy
+costs users the file download and the refresh prompt, not a cold start.
 `updateCamFlipVisibility()` hides สลับกล้อง when `enumerateDevices()` counts
 one camera (typical desktop). It hides only on a successful count — if the
 enumeration throws, the button stays, since a phone that can't be enumerated
@@ -368,8 +371,21 @@ Local snapshot: `saveSnapshot()`/`applySnapshot()` keep the last good
 disk in ~100ms instead of waiting on the network. The server's answer
 always wins: `resolveAccess()` runs regardless, and if it says the device
 has no roles the snapshot is cleared and the page reloads into the guest
-screen. The snapshot is bound to `deviceId` + `APP_VERSION` and expires
+screen. The snapshot is bound to `deviceId` + `SNAPSHOT_SCHEMA` and expires
 after 7 days.
+`SNAPSHOT_SCHEMA` is deliberately **not** `APP_VERSION`. It used to be, and
+since the rule above forces `APP_VERSION` to move on every deploy, every
+shipped change — a reworded message, a new link — threw away the snapshot on
+every device in the field. Each user's next open then went back to waiting on
+the Apps Script queue, which is the exact "อยู่ๆ ก็โหลดช้ากว่าเดิม after an
+update" report, caused by the very mechanism written to prevent it. Bump
+`SNAPSHOT_SCHEMA` only when the *shape* of what `saveSnapshot()` writes
+changes (the `auth` fields, or the meaning of `config`/`counters`/`orders`/
+`notifications`), not when the code around it changes. Forgetting to bump it
+when the shape does change costs a 1-3s paint from stale-shaped data before
+the server's answer lands — it cannot corrupt server data, because the
+snapshot still never sets `state.loaded`/`state.ordersLoaded` (next
+paragraph).
 The snapshot deliberately does **not** set `state.loaded` or
 `state.ordersLoaded` — those two flags mean "fetched from the server this
 session" and are what gate *writing back* (`persistOrders()`, editing
