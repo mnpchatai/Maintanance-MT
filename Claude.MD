@@ -345,46 +345,6 @@ Three rules around it, none of them optional:
 - The `intent://` branch (non-LINE Android WebViews) cannot carry the fragment —
   `#Intent;…` is that URL's own syntax — so those users still land on the
   request-access screen. Only LINE gets the seamless handoff.
-**The 50,000-character-per-cell ceiling is the sharpest edge in this design.**
-A KV key is one spreadsheet cell, and Google Sheets refuses any cell longer than
-50,000 characters — `setValue()` throws and *nothing* is written. `storeSet()`
-now refuses to send anything over `KV_VALUE_MAX` (48,000) and reads the reply
-looking for failure, because until 12 Sep 2026 it checked only the HTTP status
-and returned `true` for every server-side failure that still answered 200. That
-one line is why "กดส่งแล้วขึ้นว่าเรียบร้อย แต่ข้อมูลไม่เข้าระบบ" was possible at
-all: the well-written guards at the call sites were all testing a value that
-could never be false.
-Two things were hitting that ceiling:
-- **Photos.** They are base64 data URLs, and every photo of one order used to be
-  packed into a single `photos:<id>` array — one cell. A 900px/q0.6 photo of real
-  machinery is 40-120 KB, i.e. 55,000-164,000 characters, so *one* photo already
-  overflowed and five never had a chance. Photos are now one key per photo
-  (`photos:<id>:<index>`, see `photoKey`/`savePhotosAt`/`loadOrderPhotos`) and
-  `compressToLimit()` steps the size/quality down until it has *measured* the
-  result under the cap rather than trusting fixed 900px/q0.6 settings. Indices
-  must stay stable: resubmit comments point at photos by range
-  (`photoFrom`/`photoCount` in `statusHistory`). Orders carry `photosSplit:true`
-  for the new layout; older orders keep the single-array layout and are migrated
-  in place the first time someone appends a photo to them.
-  This only became visible when browser use took off, because LINE's Android
-  WebView could not take photos at all — the bug had been silently eating
-  attachments for as long as anyone had managed to attach one.
-- **`orders` itself, and this one is not fixed.** Every order in the system is one
-  JSON blob in one cell. A fully-worked order is ~2,300 characters, so the ceiling
-  arrives somewhere around 20 orders, and when it does, *every* submit and every
-  approval fails at once — it does not degrade gradually. `storageCapacityNote()`
-  on the Settings page warns from 70% and escalates at 90% so this is seen coming.
-  The real fix is one key per order, which also kills the lost-update race below,
-  but it cannot be done from this repo alone: the Apps Script mirror reads the
-  `orders` key to rebuild the ใบแจ้งซ่อม tab and would have to be rewritten by hand
-  to match.
-**Writes to `orders` still have no read-before-write.** `saveNotifications()` and
-`saveAccessRequests()` both fetch the latest copy and merge before writing;
-`persistOrders()` and `submitOrder()` still blast `state.orders` wholesale. With
-polling backed off to 15-90s, a client's copy can be a minute and a half stale, so
-two people acting in the same window silently delete each other's work and both
-are told it succeeded. The same `saveNotifications` pattern is what this needs.
-
 **Bump `APP_VERSION` in every deploy that changes `index.html`.**
 `checkForUpdate()` re-fetches the file and compares only that constant, so a
 shipped fix with an unchanged version leaves every open tab — and every
@@ -515,6 +475,46 @@ KV sheet (`KV` tab): generic key→JSON-string store. Keys in use:
 `accessRequests`, `lineUsers`, `lineUserRoles`. This
 is the literal backing store for `storeGet`/`storeSet` in the client for
 everything except `config`.
+**The 50,000-character-per-cell ceiling is the sharpest edge in this design.**
+A KV key is one spreadsheet cell, and Google Sheets refuses any cell longer than
+50,000 characters — `setValue()` throws and *nothing* is written. `storeSet()`
+now refuses to send anything over `KV_VALUE_MAX` (48,000) and reads the reply
+looking for failure, because until 12 Sep 2026 it checked only the HTTP status
+and returned `true` for every server-side failure that still answered 200. That
+one line is why "กดส่งแล้วขึ้นว่าเรียบร้อย แต่ข้อมูลไม่เข้าระบบ" was possible at
+all: the well-written guards at the call sites were all testing a value that
+could never be false.
+Two things were hitting that ceiling:
+- **Photos.** They are base64 data URLs, and every photo of one order used to be
+  packed into a single `photos:<id>` array — one cell. A 900px/q0.6 photo of real
+  machinery is 40-120 KB, i.e. 55,000-164,000 characters, so *one* photo already
+  overflowed and five never had a chance. Photos are now one key per photo
+  (`photos:<id>:<index>`, see `photoKey`/`savePhotosAt`/`loadOrderPhotos`) and
+  `compressToLimit()` steps the size/quality down until it has *measured* the
+  result under the cap rather than trusting fixed 900px/q0.6 settings. Indices
+  must stay stable: resubmit comments point at photos by range
+  (`photoFrom`/`photoCount` in `statusHistory`). Orders carry `photosSplit:true`
+  for the new layout; older orders keep the single-array layout and are migrated
+  in place the first time someone appends a photo to them.
+  This only became visible when browser use took off, because LINE's Android
+  WebView could not take photos at all — the bug had been silently eating
+  attachments for as long as anyone had managed to attach one.
+- **`orders` itself, and this one is not fixed.** Every order in the system is one
+  JSON blob in one cell. A fully-worked order is ~2,300 characters, so the ceiling
+  arrives somewhere around 20 orders, and when it does, *every* submit and every
+  approval fails at once — it does not degrade gradually. `storageCapacityNote()`
+  on the Settings page warns from 70% and escalates at 90% so this is seen coming.
+  The real fix is one key per order, which also kills the lost-update race below,
+  but it cannot be done from this repo alone: the Apps Script mirror reads the
+  `orders` key to rebuild the ใบแจ้งซ่อม tab and would have to be rewritten by hand
+  to match.
+**Writes to `orders` still have no read-before-write.** `saveNotifications()` and
+`saveAccessRequests()` both fetch the latest copy and merge before writing;
+`persistOrders()` and `submitOrder()` still blast `state.orders` wholesale. With
+polling backed off to 15-90s, a client's copy can be a minute and a half stale, so
+two people acting in the same window silently delete each other's work and both
+are told it succeeded. The same `saveNotifications` pattern is what this needs.
+
 `config` is special and bidirectional: departments/machines/
 technicians are not stored as JSON in KV. `doGet('config')` builds the
 config object live by reading three separate sheet tabs (แผนก,
