@@ -1727,7 +1727,20 @@ function relayResultNote({ data, sent, targets, errors, wanted }){
   if(versionBad){
     parts.push(`โค้ด relay ใน Apps Script เป็น${data.version ? 'เวอร์ชัน ' + data.version : 'เวอร์ชันเก่า (ไม่บอกเวอร์ชันกลับมา)'} แต่แอปรุ่นนี้คู่กับ ${RELAY_CODE_VERSION} — ${RELAY_UPDATE_STEPS}`);
   }
-  if(data.error) parts.push('relay ปฏิเสธคำขอ: ' + data.error);
+  /* คำตอบของ doGet ไม่ใช่คำตอบของการส่งแจ้งเตือน — แยกให้ออกก่อนอย่างอื่นทั้งหมด
+     doPost ที่รับคำขอส่งจริงตอบ sent/targets เป็นตัวเลขเสมอ ส่วนหน้าเริ่มต้นของ relay (doGet)
+     ตอบ { ok, service, version, hint } ซึ่ง "มีเวอร์ชันถูกต้อง" ติดมาด้วย การเช็กเวอร์ชันจึงผ่าน
+     แล้วโค้ดเดิมไหลไปลงสาขา "relay ตอบว่าไม่มีผู้รับเลย" ซึ่งบอกให้ไปวางโค้ด relay ใหม่
+     ทั้งที่โค้ด relay ไม่ได้ผิดอะไรเลย — คนที่เจอปัญหานี้จึงถูกส่งไปแก้ผิดจุดซ้ำๆ
+     ความจริงคือคำขอไปไม่ถึง doPost ต่างหาก (POST ถูกเปลี่ยนเป็น GET ระหว่างทาง) */
+  const notNotifyReply = typeof data.sent !== 'number' && typeof data.targets !== 'number';
+  if(notNotifyReply){
+    parts.push('คำขอไปไม่ถึงส่วนรับข้อความของ relay — ได้คำตอบของหน้าเริ่มต้น (doGet) กลับมาแทน '
+      + 'แปลว่า POST ถูกเปลี่ยนเป็น GET ระหว่างทาง มักเกิดจาก Deploy ตั้ง "Who has access" ไม่ใช่ Anyone '
+      + 'หรือ URL ชี้ไปที่ deployment เก่า — แก้ที่ Deploy → Manage deployments → Who has access: Anyone '
+      + 'แล้ว Deploy เวอร์ชันใหม่ (ไม่ต้องแก้โค้ด relay เพราะโค้ดไม่ได้ผิด)');
+  }
+  else if(data.error) parts.push('relay ปฏิเสธคำขอ: ' + data.error);
   else if(!sent){
     if(targets > 0){
       // relay หาคนเจอแล้ว แต่ LINE ไม่รับ — สาเหตุอยู่ที่ token/ตัว userId/โควตา ไม่ใช่ที่รายชื่อผู้รับ
