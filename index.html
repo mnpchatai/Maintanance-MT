@@ -576,7 +576,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-09.1';
+const APP_VERSION = '2026-09-12.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1718,13 +1718,24 @@ async function tryLineWebhook(role, message){
 }
 
 /* ============================= NOTIFICATIONS ============================= */
+/* ลิงก์คู่ในข้อความ LINE — ให้ผู้รับเลือกเองว่าจะเปิดในเบราว์เซอร์ในตัว LINE (แตะลิงก์บนสุด
+   ตามพฤติกรรมปกติของ LINE) หรือเปิดผ่านเบราว์เซอร์ของเครื่องโดยตรง (ลิงก์ล่างต่อ
+   openExternalBrowser=1 — กลไกเดียวกับ externalBrowserUrl() ด้านบนที่ใช้อยู่แล้วตอนแอปรันอยู่ใน
+   WebView ของ LINE เอง) เดิมส่งลิงก์เดียว ผู้ที่เจอปัญหาในเว็บวิวของ LINE (กล้อง/รหัสอุปกรณ์ไม่คงอยู่
+   ฯลฯ) ต้องรู้เองว่ามีเมนู "เปิดในเบราว์เซอร์" ซ่อนอยู่มุมขวาบนของ LINE ทำให้ส่วนใหญ่ไม่เจอทางออก
+   ต้องมี 2 บรรทัดแยกกันเสมอ — LINE รู้จัก URL ในข้อความธรรมดาด้วยการสแกนหาลิงก์ทีละบรรทัด ต่อ
+   คำนำหน้าไว้บรรทัดเดียวกับ URL ได้ (ไม่กระทบการดักลิงก์) แต่จะรวมสองลิงก์ไว้บรรทัดเดียวกันไม่ได้ */
+function dualOpenLinks(url){
+  const external = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'openExternalBrowser=1';
+  return `เปิดในไลน์: ${url}\nเปิดในเบราว์เซอร์: ${external}`;
+}
 // ลิงก์ลึกไปหน้า "ตั้งค่าข้อมูลหลัก" (ส่วนคำขอสิทธิ์เข้าใช้งานอยู่บนสุดของหน้านั้นพอดี) —
 // ใช้กลไกเดียวกับ orderDeepLink ด้านล่าง (?role=...&view=...) ดู init() ที่ท้ายไฟล์
 function accessRequestsDeepLink(){
-  return `${APP_URL}?role=admin&view=settings`;
+  return dualOpenLinks(`${APP_URL}?role=admin&view=settings`);
 }
 function orderDeepLink(orderId, role){
-  return `${APP_URL}?order=${encodeURIComponent(orderId)}&role=${encodeURIComponent(role)}`;
+  return dualOpenLinks(`${APP_URL}?order=${encodeURIComponent(orderId)}&role=${encodeURIComponent(role)}`);
 }
 /* ============ การเขียนรายการแจ้งเตือนแบบไม่ทับกันเอง ============
    คีย์ 'notifications' บนเซิร์ฟเวอร์เป็น "อาร์เรย์ก้อนเดียว" เขียนทีไรก็ทับทั้งก้อน เดิมโค้ดเอา
