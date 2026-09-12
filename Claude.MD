@@ -508,20 +508,6 @@ Two things were hitting that ceiling:
   but it cannot be done from this repo alone: the Apps Script mirror reads the
   `orders` key to rebuild the ใบแจ้งซ่อม tab and would have to be rewritten by hand
   to match.
-Two keys that look like they share the ceiling but do not: `config` is written by
-`doPost('config', ...)` as *rows* across the แผนก/เครื่องจักร/ช่าง tabs, never as one
-cell, so it is listed in `KV_UNCAPPED_KEYS` and skips the size guard — a factory
-with a few hundred machines would otherwise be unable to save Settings at all,
-which the first version of the guard accidentally caused. `lineSendLog` has
-capped itself by both count and characters since it was written; `notifications`
-now does the same through `trimNotifications()` (read entries are dropped oldest
-first, unread ones only if that is still not enough), because it previously grew
-without any limit at roughly 10-14 entries per order — a ceiling of 8-15 orders,
-tighter than `orders` itself.
-`storageCapacityNote()` on the Settings page reports all three single-cell keys
-with a per-key percentage, so whichever one is closest to the wall is visible
-before it stops the system.
-
 **Writes to `orders` still have no read-before-write.** `saveNotifications()` and
 `saveAccessRequests()` both fetch the latest copy and merge before writing;
 `persistOrders()` and `submitOrder()` still blast `state.orders` wholesale. With
