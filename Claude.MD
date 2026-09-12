@@ -312,6 +312,39 @@ honor it and wipe the half-typed form, which is not persisted anywhere.
 `startCamStream()` retries once with a bare `{video:true}` when the detailed
 constraints throw — but not on `NotAllowedError`/`SecurityError`, where a
 retry cannot help.
+Getting the user *out* of LINE's Android WebView is the only real fix for the
+camera, so two things support that path (both live for everyone since
+12 Sep 2026):
+`inAppBrowserBanner()` warns at the top of every screen when
+`isAndroid() && isInAppBrowser()`, **before** the user fills anything in.
+Previously they only learned the camera was dead by pressing ถ่ายภาพ with the
+form already filled, and since the form has no draft storage, moving to a real
+browser meant retyping the whole thing. It is Android-only on purpose: LINE's
+iOS WebView does grant camera access, so pushing iPhone users out buys nothing.
+`externalBrowserUrl()` also appends the device id as a `#did=` fragment, and
+`HANDOFF_DID`/`adoptHandoffDeviceId()` pick it up on the other side. Without it
+"open in your browser" dead-ends: the device id lives in the WebView's own
+localStorage/cookie, so Chrome generates a *new* one and the user lands on the
+request-access screen seconds after working normally — which is why almost
+nobody actually moved. A fragment, never a query string: fragments are not sent
+with the HTTP request, so the credential stays out of server logs, and the
+receiver strips it from the address bar immediately (same reason `DEEP_LINK`
+strips its query).
+Three rules around it, none of them optional:
+- **Never put `#did=` into anything that reaches more than one person** — above
+  all the LINE notification text. `dualOpenLinks()` deliberately has no device
+  id in it. The id is a bearer credential; the handoff link is a one-device,
+  one-person handover and nothing else.
+- `adoptHandoffDeviceId()` must not overwrite an identity that already works on
+  the receiving browser, or a forwarded link silently swaps someone else's
+  account. It currently proves "this browser worked" via `readSnapshot()`,
+  which is **weaker than it looks**: the snapshot expires after 7 days, is null
+  right after any `SNAPSHOT_SCHEMA` bump, and is null wherever localStorage is
+  blocked — in all three the guard is open. A durable "was authorised once"
+  flag would be the right fix; it has not been written yet.
+- The `intent://` branch (non-LINE Android WebViews) cannot carry the fragment —
+  `#Intent;…` is that URL's own syntax — so those users still land on the
+  request-access screen. Only LINE gets the seamless handoff.
 **Bump `APP_VERSION` in every deploy that changes `index.html`.**
 `checkForUpdate()` re-fetches the file and compares only that constant, so a
 shipped fix with an unchanged version leaves every open tab — and every
