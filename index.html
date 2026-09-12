@@ -264,6 +264,19 @@
     padding:10px 20px; display:flex; align-items:center; justify-content:center; gap:12px;
     font-size:13.5px; font-weight:600; flex-wrap:wrap; text-align:center;
   }
+  .inapp-banner{
+    background:#fff4e5; color:#8a4b00; border-bottom:2px solid #e08b00;
+    padding:10px 16px; font-size:13px; line-height:1.5; text-align:center;
+  }
+  .inapp-banner b{display:block; font-size:13.5px; margin-bottom:2px;}
+  .inapp-banner a{
+    display:inline-block; margin-top:7px; background:#e08b00; color:#fff; text-decoration:none;
+    padding:7px 16px; border-radius:7px; font-weight:700;
+  }
+  .preview-tag{
+    background:#1f2937; color:#9ae6b4; text-align:center; font-size:11.5px;
+    padding:3px 10px; letter-spacing:.3px;
+  }
 
   /* notifications */
   .notif-item{display:flex; gap:12px; padding:13px 14px; border-radius:8px; margin-bottom:8px; background:#fff; border:1px solid #ece6d8;}
@@ -577,6 +590,30 @@ const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
 const APP_VERSION = '2026-09-12.2';
+/* ============================= โหมดทดสอบ (?preview=1) =============================
+   ฟีเจอร์ที่ยังไม่ยืนยันกับผู้ใช้จริงถูกปิดไว้ทั้งหมด และเปิดเฉพาะเครื่องที่เปิดลิงก์ด้วย
+   ?preview=1 (ปิดด้วย ?preview=0) — ค่านี้จำไว้ใน localStorage ของเครื่องนั้นเครื่องเดียว
+   จึงไม่กระทบผู้ใช้คนอื่นแม้โค้ดจะอยู่บน main และ deploy ขึ้น GitHub Pages แล้ว
+   เหตุผลที่ต้องทำแบบนี้แทนการแยกไฟล์ทดสอบ: แอปทั้งตัวอยู่ในไฟล์เดียว การก๊อปไฟล์ไปทดสอบ
+   แปลว่าต้องแก้สองที่ตลอดไปและมีวันที่ลืมแก้ข้างใดข้างหนึ่ง
+   สิ่งที่โหมดนี้เปิด: แถบเตือนตอนเปิดผ่านแอปอื่นบน Android, การส่งรหัสประจำเครื่องข้ามไป
+   เบราว์เซอร์ (ดู externalBrowserUrl/HANDOFF_DID) และคำอธิบายท้ายลิงก์ในข้อความแจ้งเตือน */
+const PREVIEW_KEY = 'mtPreview';
+const PREVIEW_ON = (function(){
+  let chosen = null;
+  try{
+    const p = new URLSearchParams(location.search).get('preview');
+    if(p === '1' || p === '0'){
+      chosen = (p === '1');
+      try{
+        if(chosen) localStorage.setItem(PREVIEW_KEY, '1');
+        else localStorage.removeItem(PREVIEW_KEY);
+      }catch(e){ /* เขียนไม่ได้ก็ใช้ได้แค่รอบนี้ */ }
+    }
+  }catch(e){ /* URL แปลก */ }
+  if(chosen !== null) return chosen;
+  try{ return localStorage.getItem(PREVIEW_KEY) === '1'; }catch(e){ return false; }
+})();
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1739,8 +1776,16 @@ async function tryLineWebhook(role, message){
    ต้องมี 2 บรรทัดแยกกันเสมอ — LINE รู้จัก URL ในข้อความธรรมดาด้วยการสแกนหาลิงก์ทีละบรรทัด ต่อ
    คำนำหน้าไว้บรรทัดเดียวกับ URL ได้ (ไม่กระทบการดักลิงก์) แต่จะรวมสองลิงก์ไว้บรรทัดเดียวกันไม่ได้ */
 function dualOpenLinks(url){
-  const external = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'openExternalBrowser=1';
-  return `เปิดในไลน์: ${url}\nเปิดในเบราว์เซอร์: ${external}`;
+  /* โหมดทดสอบต้องติดไปกับลิงก์ด้วย ไม่งั้นคนที่กดจากไลน์จะหลุดออกจากโหมดทดสอบทันที
+     แล้วทดสอบเส้นทางจริง (กดจากแจ้งเตือน → เจอแถบเตือน → กดไปเบราว์เซอร์) ไม่ได้เลย
+     ลิงก์ในข้อความแจ้งเตือนถึงคนหลายคน จึงห้ามมีรหัสประจำเครื่องติดไปเด็ดขาด — ต่างจาก
+     externalBrowserUrl() ที่ส่งต่อกันภายในเครื่องเดียวกัน */
+  const base = PREVIEW_ON ? url + (url.indexOf('?') >= 0 ? '&' : '?') + 'preview=1' : url;
+  const external = base + (base.indexOf('?') >= 0 ? '&' : '?') + 'openExternalBrowser=1';
+  // บอกเงื่อนไขไว้ท้ายบรรทัดแทนการสลับลำดับ — ข้อความเดียวส่งถึงทุกคน แยกตามเครื่องไม่ได้ ถ้าดัน
+  // ทุกคนออกไปเบราว์เซอร์ คนใช้ iPhone ที่ถ่ายรูปในไลน์ได้อยู่แล้วจะต้องสลับแอปโดยไม่จำเป็น
+  const hint = PREVIEW_ON ? ' (Android: ถ้าต้องถ่ายรูป ให้เปิดทางนี้)' : '';
+  return `เปิดในไลน์: ${base}\nเปิดในเบราว์เซอร์${hint}: ${external}`;
 }
 // ลิงก์ลึกไปหน้า "ตั้งค่าข้อมูลหลัก" (ส่วนคำขอสิทธิ์เข้าใช้งานอยู่บนสุดของหน้านั้นพอดี) —
 // ใช้กลไกเดียวกับ orderDeepLink ด้านล่าง (?role=...&view=...) ดู init() ที่ท้ายไฟล์
@@ -2093,12 +2138,26 @@ async function takePhoto(target, inputId){
    ใช้กับ <a target="_blank"> เท่านั้น ไม่ใช่ location.href — ถ้าเครื่องไหนไม่รองรับ หน้าเดิม
    พร้อมข้อความที่พิมพ์ค้างไว้จะได้ไม่ถูกโหลดทับ (ฟอร์มนี้ไม่ได้เก็บ draft ไว้ที่ไหน) */
 function externalBrowserUrl(){
-  const href = location.href.split('#')[0];
+  let href = location.href.split('#')[0];
+  // โหมดทดสอบต้องติดไปกับเบราว์เซอร์ปลายทางด้วย ไม่งั้นฝั่งนั้นจะไม่อ่านรหัสที่ส่งข้ามไป
+  if(PREVIEW_ON && !/[?&]preview=1\b/.test(href)){
+    href += (href.indexOf('?') >= 0 ? '&' : '?') + 'preview=1';
+  }
+  /* ส่ง "รหัสประจำเครื่อง" ข้ามไปให้เบราว์เซอร์ปลายทางใช้ตัวตนเดิมต่อได้เลย
+     ปัญหาที่แก้: รหัสนี้เก็บอยู่ใน localStorage/คุกกี้ของเบราว์เซอร์ที่เปิดอยู่ ซึ่ง WebView ของ LINE
+     กับ Chrome เป็นคนละที่เก็บกันสนิท พอกดลิงก์นี้ Chrome จึงสร้างรหัสใหม่ให้ = กลายเป็นคนแปลกหน้า
+     ไปโผล่หน้าขอสิทธิ์ ทั้งที่เพิ่งใช้งานอยู่ดีๆ คนส่วนใหญ่ถอดใจตรงนี้และไม่ได้ย้ายจริง
+     ใส่ไว้หลัง # เท่านั้น (ไม่ใช่ query) เพราะ fragment ไม่ถูกส่งไปกับคำขอ HTTP รหัสจึงไม่ไปโผล่ใน
+     บันทึกของเซิร์ฟเวอร์ และฝั่งรับลบทิ้งจากแถบที่อยู่ทันทีที่อ่าน (ดู HANDOFF_DID)
+     ข้อควรระวังที่ยอมรับไว้: รหัสนี้เป็นกุญแจผ่านประตู ใครถือก็เข้าเป็นคนนั้นได้ ลิงก์นี้จึงห้ามหลุด
+     ออกไปนอกเครื่องตัวเอง — ใช้เฉพาะปุ่ม "เปิดในเบราว์เซอร์" ที่ส่งต่อกันภายในเครื่องเดียวกัน
+     และห้ามนำไปใส่ในข้อความแจ้งเตือน LINE เด็ดขาด (ดู dualOpenLinks ที่ไม่มีรหัสนี้) */
+  const hash = (PREVIEW_ON && state.deviceId) ? '#did=' + encodeURIComponent(state.deviceId) : '';
   if(/\bLine\//i.test(navigator.userAgent || '')){
-    return href + (href.indexOf('?') >= 0 ? '&' : '?') + 'openExternalBrowser=1';
+    return href + (href.indexOf('?') >= 0 ? '&' : '?') + 'openExternalBrowser=1' + hash;
   }
   if(isAndroid()) return 'intent://' + href.replace(/^https?:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;end';
-  return href;
+  return href + hash;
 }
 /* กล่องบอกทางออกเมื่อกล้องถูกบล็อก — มีทั้งลิงก์เปิดเบราว์เซอร์จริง ปุ่มลองกล้องของเครื่อง
    อีกรอบ (บางเครื่อง capture ใช้ได้) และวิธีที่ได้ผลเสมอคือถ่ายไว้ก่อนแล้วแนบจากอัลบั้ม */
@@ -4402,6 +4461,27 @@ function renderRejectedAccess(){
 }
 
 /* ============================= MAIN RENDER ============================= */
+/* ป้ายบอกว่าเครื่องนี้อยู่ในโหมดทดสอบ — ต้องเห็นได้ตลอด ไม่งั้นเปิดค้างไว้โดยไม่รู้ตัวแล้วสับสนว่า
+   ทำไมเห็นไม่เหมือนเพื่อนร่วมงาน (ปิดด้วยการต่อ ?preview=0 ท้ายลิงก์) */
+function previewTag(){
+  return PREVIEW_ON ? `<div class="preview-tag">โหมดทดสอบ — ต่อ ?preview=0 ท้ายลิงก์เพื่อปิด</div>` : '';
+}
+/* เตือน "ตั้งแต่ก่อนเริ่มกรอก" ว่าเปิดผ่านเบราว์เซอร์ในแอปอื่นบน Android อยู่ ซึ่งถ่ายรูปไม่ได้
+   เดิมผู้ใช้จะรู้ก็ต่อเมื่อกรอกจนครบแล้วกดถ่ายภาพ แล้วเจอกล่อง camBlockedPanel() ตอนนั้นการย้ายไป
+   เบราว์เซอร์แปลว่าพิมพ์ใหม่ทั้งใบ เพราะฟอร์มนี้ไม่ได้เก็บ draft ไว้ที่ไหนเลย
+   เหตุผลทางเทคนิค: WebView ของ LINE บน Android ไม่มีกล่องขออนุญาตใช้กล้อง getUserMedia จึงถูก
+   ปฏิเสธเสมอ และ input[capture] ก็ไม่ยิง intent กล้องแต่เด้งเข้าอัลบั้มแทน = ตายทั้งสองทาง
+   จำกัดเฉพาะ Android เพราะบน iOS เบราว์เซอร์ในแอปของ LINE ใช้กล้องได้ปกติ ไม่ต้องไล่ใครออกไป */
+function inAppBrowserBanner(){
+  if(!PREVIEW_ON) return '';
+  if(!(isAndroid() && isInAppBrowser())) return '';
+  return `<div class="inapp-banner">
+    <b>กำลังเปิดผ่านแอปอื่นอยู่ — ปุ่มถ่ายภาพจะใช้ไม่ได้</b>
+    ถ้าต้องแนบรูป ให้เปิดหน้านี้ในเบราว์เซอร์ของเครื่องก่อนเริ่มกรอก (กดแล้วเข้าใช้งานต่อได้เลย ไม่ต้องขอสิทธิ์ใหม่)
+    หรือจะถ่ายด้วยแอปกล้องของเครื่องไว้ก่อนแล้วกด "เลือกจากอัลบั้ม" ก็ได้เหมือนกัน
+    <a href="${escapeHtml(externalBrowserUrl())}" target="_blank" rel="noopener">เปิดในเบราว์เซอร์ของเครื่อง</a>
+  </div>`;
+}
 function render(){
   const app = document.getElementById('app');
   if(state.authStatus === 'loading'){
@@ -4436,7 +4516,7 @@ function render(){
       🔄 มีการอัปเดตระบบเวอร์ชันใหม่ — กรุณารีเฟรชหน้าเพื่อใช้งานเวอร์ชันล่าสุด
       <button class="btn btn-primary btn-sm" onclick="location.reload()">รีเฟรชตอนนี้</button>
     </div>` : '';
-  app.innerHTML = updateBanner + renderHeader() + `<main>${body}</main>`
+  app.innerHTML = previewTag() + inAppBrowserBanner() + updateBanner + renderHeader() + `<main>${body}</main>`
     + `<div class="app-version">เวอร์ชัน ${APP_VERSION}</div>`;
 
   if(fid){
@@ -4560,6 +4640,31 @@ async function checkForUpdate(){
    หนึ่งรอบ) มาก่อน ระหว่างนั้นแอปวาดหน้าจอตาม state.view เริ่มต้นคือ 'new' = "ใบคำร้อง/ใบแจ้งซ่อม"
    ผู้ใช้ที่กดลิงก์แจ้งเตือนจากไลน์จึงต้องนั่งดูฟอร์มแจ้งซ่อมเปล่าๆ ที่ไม่เกี่ยวข้องอยู่หลายวินาที
    ก่อนหน้าจอจะกระโดดไปใบที่ตั้งใจเปิด */
+/* รับ "รหัสประจำเครื่อง" ที่ส่งข้ามมาจากเบราว์เซอร์ในแอป (ดู externalBrowserUrl)
+   อ่านจาก fragment แล้วลบออกจากแถบที่อยู่ทันที ด้วยเหตุผลเดียวกับที่ DEEP_LINK ลบ query ทิ้ง
+   — และที่นี่จำเป็นกว่า เพราะสิ่งที่อยู่ในนั้นคือกุญแจผ่านประตูของผู้ใช้คนนั้น */
+const HANDOFF_DID = (function(){
+  if(!PREVIEW_ON) return '';
+  let did = '';
+  try{
+    did = new URLSearchParams((location.hash || '').replace(/^#/, '')).get('did') || '';
+  }catch(e){ /* hash แปลก */ }
+  if(!isDeviceId(did)) return '';
+  try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){ /* ไม่รองรับก็ข้าม */ }
+  return String(did).trim();
+})();
+/* ใช้รหัสที่ส่งข้ามมา — แต่ "ห้ามทับตัวตนที่ใช้งานได้อยู่แล้ว" บนเครื่องปลายทาง
+   ถ้าลิงก์หลุดไปถึงคนอื่นที่ใช้แอปอยู่แล้ว การทับจะสลับบัญชีเขาเป็นของเจ้าของลิงก์โดยเขาไม่รู้ตัว
+   เครื่องที่ "ใช้งานได้อยู่แล้ว" ดูจากการมีสำเนาในเครื่อง ซึ่ง saveSnapshot() เขียนเฉพาะตอนที่
+   ผ่านการตรวจสิทธิ์และโหลด config จริงสำเร็จแล้วเท่านั้น จึงเป็นหลักฐานว่าเครื่องนี้เคยเข้าได้จริง */
+function adoptHandoffDeviceId(id){
+  const existing = readStoredDeviceId();
+  if(!id || existing === id) return false;
+  if(existing && readSnapshot()) return false;
+  persistDeviceId(id);
+  clearSnapshot();   // เปลี่ยนตัวตนแล้ว สำเนาของรหัสเดิมใช้ต่อไม่ได้
+  return true;
+}
 const DEEP_LINK = (function(){
   const params = new URLSearchParams(location.search);
   const dl = {
@@ -4639,6 +4744,7 @@ async function startApp(){
   render();
   // เริ่มจากสำเนาในเครื่องก่อนเสมอ ถ้ามี — วาดหน้าจอได้ทันทีโดยไม่แตะเครือข่ายเลย แล้วค่อยเช็คสิทธิ์
   // และโหลดของสดทับเบื้องหลัง ผู้ใช้จึงไม่ต้องนั่งดู "กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…" ระหว่างรอคิว Apps Script
+  if(HANDOFF_DID) adoptHandoffDeviceId(HANDOFF_DID);   // ต้องมาก่อน getDeviceId() ไม่งั้นได้รหัสใหม่ไปแล้ว
   state.deviceId = getDeviceId();
   state.didHash = await sha256Hex(state.deviceId);
   const bootedFromCache = applySnapshot(readSnapshot());
