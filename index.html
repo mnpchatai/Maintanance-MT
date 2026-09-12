@@ -585,7 +585,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-12.4';
+const APP_VERSION = '2026-09-12.5';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -1174,16 +1174,81 @@ async function copyText(text, okMsg){
     ta.remove();
   }
 }
+/* เพดานจริงของ Google Sheets คือ 50,000 ตัวอักษร "ต่อหนึ่งช่อง" และคีย์หนึ่งคีย์ของ KV = ช่องเดียว
+   ค่าที่ยาวเกินนี้ setValue() ฝั่ง Apps Script จะโยน error ทิ้ง — เขียนไม่ลงเลยสักตัวอักษร
+   เผื่อไว้ที่ 45,000 เพราะฝั่งเซิร์ฟเวอร์อาจห่อค่าเพิ่มอีกเล็กน้อยก่อนเขียน */
+const KV_VALUE_MAX = 48000;
+/* เหตุผลของการเขียนที่ล้มเหลวครั้งล่าสุด — ผู้เรียกเอาไปต่อท้ายข้อความแจ้งผู้ใช้ได้ เพราะ
+   "เชื่อมต่อฐานข้อมูลไม่ได้" กับ "ข้อมูลใหญ่เกินกว่าที่ชีตรับได้" ต้องแก้คนละทางกันโดยสิ้นเชิง
+   ทางหนึ่งคือกดใหม่แล้วหาย อีกทางคือกดใหม่กี่ครั้งก็ไม่มีวันสำเร็จจนกว่าผู้ดูแลจะไปจัดการข้อมูล */
+let lastStoreSetError = '';
+/* คำเตือนความจุของคีย์ 'orders' — ใบแจ้งซ่อมทั้งระบบถูกเก็บเป็น JSON ก้อนเดียวในช่องเดียวของชีต
+   ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 2,300 ตัวอักษร เพดานจริงจึงอยู่แถวๆ 20 ใบ
+   เมื่อถึงเพดาน การส่งใบใหม่และการอนุมัติ "ทุกรายการ" จะล้มเหลวพร้อมกันทั้งระบบ ไม่ใช่ค่อยๆ แย่ลง
+   จึงต้องเห็นล่วงหน้า ไม่ใช่รู้ตัวตอนที่ทุกคนกดอะไรไม่ได้แล้ว — ทางแก้ระยะยาวคือแยกเก็บทีละใบ
+   ซึ่งต้องแก้สคริปต์ฝั่ง Apps Script ที่กระจกข้อมูลลงแท็บ ใบแจ้งซ่อม ด้วย (ไม่ได้อยู่ใน repo นี้) */
+function storageCapacityNote(){
+  if(!state.ordersLoaded) return '';
+  const used = JSON.stringify(state.orders).length;
+  const pct = Math.round(used / KV_VALUE_MAX * 100);
+  if(pct < 70) return '';
+  const critical = pct >= 90;
+  return `<div class="cam-blocked" style="margin-top:10px; ${critical ? 'border-color:#c0392b;' : ''}">
+    <b>${critical ? '⚠️ พื้นที่เก็บใบแจ้งซ่อมใกล้เต็มแล้ว' : 'พื้นที่เก็บใบแจ้งซ่อมใช้ไปมากแล้ว'}</b><br>
+    ใช้ไป ${used.toLocaleString()} จาก ${KV_VALUE_MAX.toLocaleString()} ตัวอักษร (${pct}%) — จำนวนใบทั้งหมด ${state.orders.length} ใบ<br>
+    ${critical
+      ? 'เมื่อเต็ม การส่งใบใหม่และการอนุมัติจะล้มเหลวพร้อมกันทั้งระบบทันที กรุณาแจ้งผู้พัฒนาเพื่อแยกที่เก็บก่อนถึงจุดนั้น'
+      : 'ควรวางแผนแยกที่เก็บใบแจ้งซ่อมก่อนเต็ม เพราะเมื่อเต็มแล้วจะกระทบทุกคนพร้อมกัน'}
+  </div>`;
+}
+function storeSetErrorHint(){
+  if(lastStoreSetError === 'too-large') return ' — ข้อมูลสะสมใหญ่เกินกว่าที่ Google Sheet รับได้ในช่องเดียว กรุณาแจ้งผู้ดูแลระบบ (กดใหม่ไม่ช่วย)';
+  return '';
+}
+/* เดิมฟังก์ชันนี้ดูแค่รหัส HTTP แล้วตอบว่าสำเร็จ ไม่เคยอ่านคำตอบเลย ผลคือความล้มเหลวฝั่งเซิร์ฟเวอร์
+   ทุกแบบที่ยังตอบ 200 กลับมา (Apps Script ดักข้อผิดพลาดเองแล้วตอบ 200, เขียนเกินเพดานช่อง,
+   ถูกเด้งไปหน้าล็อกอินของ Google) ถูกนับเป็น "บันทึกแล้ว" ทั้งหมด แอปจึงขึ้นกล่อง
+   "✓ ส่งข้อมูลเรียบร้อย" ทับข้อมูลที่ไม่เคยไปถึงชีต — อาการ "กดส่งแล้วแต่ข้อมูลไม่เข้าระบบ"
+   ตอนนี้กันสองชั้น: ชั้นแรกไม่ส่งของที่ใหญ่เกินเพดานออกไปตั้งแต่ต้น (รู้ผลทันที ไม่เปลืองรอบ
+   สื่อสาร) ชั้นสองอ่านคำตอบจริงแล้วถือว่าล้มเหลวเมื่อเห็นร่องรอยความผิดพลาด */
 async function storeSet(key, val){
+  const value = JSON.stringify(val);
+  lastStoreSetError = '';
+  if(value.length > KV_VALUE_MAX){
+    lastStoreSetError = 'too-large';
+    console.error('storage set rejected — value too large', key, value.length, '>', KV_VALUE_MAX);
+    return false;
+  }
   try{
     const res = await fetch(API_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ key, value: JSON.stringify(val) })
+      body: JSON.stringify({ key, value })
     });
     if(!res.ok) throw new Error('HTTP ' + res.status);
+    /* อ่านคำตอบเท่าที่อ่านได้ — รูปแบบคำตอบของ doPost ไม่ได้ถูกกำหนดตายตัวไว้ จึงไม่ตัดสินว่า
+       "สำเร็จ" จากรูปแบบใดรูปแบบหนึ่ง แต่ตัดสินว่า "ล้มเหลว" เมื่อเจอร่องรอยที่เป็นไปไม่ได้ในกรณี
+       สำเร็จ: หน้า HTML (หน้าล็อกอิน Google หรือหน้าข้อผิดพลาดของ Apps Script) หรือ JSON ที่บอก
+       ว่าไม่สำเร็จ อ่านคำตอบไม่ได้เลย (เช่นโดน CORS หลัง redirect) ไม่นับเป็นล้มเหลว เพราะคำขอ
+       อาจลงชีตไปแล้วจริง — กรณีนั้นปล่อยให้รอบ poll ถัดไปเป็นตัวบอกความจริง */
+    let body = '';
+    try{ body = await res.text(); }catch(e){ return true; }
+    const head = body.slice(0, 400).toLowerCase();
+    if(head.includes('<!doctype') || head.includes('<html')){
+      lastStoreSetError = 'html';
+      console.error('storage set failed — got HTML instead of a result', key, body.slice(0, 200));
+      return false;
+    }
+    try{
+      const data = JSON.parse(body);
+      if(data && (data.ok === false || data.success === false || data.error)){
+        lastStoreSetError = 'server';
+        console.error('storage set failed — server reported an error', key, data);
+        return false;
+      }
+    }catch(e){ /* ไม่ใช่ JSON ก็ไม่ถือว่าผิด ตราบใดที่ไม่ใช่ HTML */ }
     return true;
-  }catch(e){ console.error('storage set failed', key, e); return false; }
+  }catch(e){ lastStoreSetError = 'network'; console.error('storage set failed', key, e); return false; }
 }
 
 /* โหลดเฉพาะข้อมูลที่จำเป็นต่อการใช้งานหน้าแรก (ฟอร์ม "ใบคำร้อง/ใบแจ้งซ่อม") ให้เร็วที่สุด — แผนก/
@@ -1926,19 +1991,61 @@ function unreadCountForRole(role){
 }
 
 /* ============================= PHOTO HANDLING ============================= */
-function resizeImageFile(file, maxW){
+/* รูปถูกเก็บเป็น data URL (base64) ลงช่องเดียวของ Google Sheets ซึ่งรับได้ 45,000 ตัวอักษร
+   (ดู KV_VALUE_MAX) base64 ทำให้ข้อมูลโตขึ้นราว 4/3 เท่า เพดานจึงเท่ากับไฟล์ JPEG ราว 33 KB
+   ของเดิมย่อด้วยค่าคงที่ 900px/q0.6 แล้วส่งไปเลยโดยไม่วัดผลลัพธ์ รูปเครื่องจักรจริงที่รายละเอียดเยอะ
+   ออกมา 40-120 KB = 55,000-164,000 ตัวอักษร ซึ่งเกินเพดานทุกใบ เขียนไม่ลงจริงแต่แอปไม่รู้
+   ตอนนี้ไล่ลดขนาด/คุณภาพลงทีละขั้นจน "วัดแล้ว" ว่าต่ำกว่าเพดานจริง เริ่มจากขั้นที่คมที่สุดเสมอ
+   รูปส่วนใหญ่จึงยังได้ 900px เท่าเดิม มีเฉพาะรูปที่หนักจริงที่ถูกลดลงมา */
+const PHOTO_MAX_CHARS = KV_VALUE_MAX - 200;   // เผื่อเครื่องหมายคำพูดและ escape ตอน JSON.stringify
+const PHOTO_STEPS = [[900,0.6],[820,0.55],[720,0.5],[620,0.45],[520,0.4],[440,0.35],[360,0.3]];
+function drawToDataUrl(src, sw, sh, maxW, quality){
+  const scale = Math.min(1, maxW / sw);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  canvas.getContext('2d').drawImage(src, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+// คืนรูปที่ "วัดแล้ว" ว่าไม่เกินเพดาน — ถ้าลดจนสุดขั้นแล้วยังเกิน คืนตัวที่เล็กที่สุดให้ผู้เรียกตัดสินใจต่อ
+function compressToLimit(src, sw, sh){
+  let out = '';
+  for(const [maxW, quality] of PHOTO_STEPS){
+    out = drawToDataUrl(src, sw, sh, maxW, quality);
+    if(out.length <= PHOTO_MAX_CHARS) return out;
+  }
+  return out;
+}
+/* ===== ที่เก็บรูป: คีย์ละรูป ไม่ใช่ทั้งใบในคีย์เดียว =====
+   เดิมรูปทุกใบของหนึ่งใบแจ้งซ่อมถูกยัดเป็นอาร์เรย์เดียวลงคีย์ photos:<id> = ช่องเดียวของชีต
+   รูปเดียวก็มักเกินเพดาน 45,000 ตัวอักษรอยู่แล้ว ห้ารูปยิ่งไปกันใหญ่ ทั้งชุดจึงเขียนไม่ลงเลย
+   ตอนนี้เก็บรูปละคี่ย์ (photos:<id>:<ดัชนี>) แต่ละช่องจึงเล็กพอเสมอ และ "ดัชนีไม่เปลี่ยน" ซึ่งจำเป็น
+   เพราะคอมเมนต์ส่งข้อมูลเพิ่มเติมอ้างถึงรูปเป็นช่วงดัชนี (photoFrom/photoCount ใน statusHistory)
+   อ่าน/เขียนแบบขนานเสมอ จำนวนรอบสื่อสารที่ผู้ใช้ต้องรอจึงเท่าเดิมคือหนึ่งรอบ ไม่ใช่บวกตามจำนวนรูป
+   ใบเก่าที่เก็บแบบอาร์เรย์เดียวยังอ่านได้ตามปกติผ่านธง o.photosSplit (ไม่มีธง = ของเดิม) */
+function photoKey(id, i){ return 'photos:' + id + ':' + i; }
+async function savePhotosAt(id, photos, startIndex){
+  if(!photos.length) return true;
+  const oks = await Promise.all(photos.map((p, n) => storeSet(photoKey(id, startIndex + n), p)));
+  return oks.every(Boolean);
+}
+/* คืนอาร์เรย์รูปของใบนี้ — undefined = ดึงไม่สำเร็จ (คนละความหมายกับ [] ที่แปลว่าไม่มีรูป)
+   ผู้เรียกต้องแยกสองกรณีนี้ให้ออก ไม่งั้นเน็ตกระตุกหนเดียวจะกลายเป็นการเขียนทับรูปเดิมด้วยของว่าง */
+async function loadOrderPhotos(o){
+  if(!o) return [];
+  if(!o.photosSplit) return await storeGet('photos:' + o.id);
+  const n = o.photoCount || 0;
+  if(!n) return [];
+  const parts = await Promise.all(Array.from({ length:n }, (_, i) => storeGet(photoKey(o.id, i))));
+  if(parts.some(p => p === undefined)) return undefined;
+  return parts.filter(p => typeof p === 'string' && p);
+}
+function resizeImageFile(file){
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => {
       const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxW / img.width);
-        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.6));
-      };
+      img.onload = () => resolve(compressToLimit(img, img.width, img.height));
       img.onerror = reject;
       img.src = e.target.result;
     };
@@ -1974,7 +2081,7 @@ async function collectPhotos(files, remaining){
   for(const f of files.slice(0, remaining)){
     if(!looksLikeImage(f)){ failed++; continue; }
     try{
-      out.push(await resizeImageFile(f, 900));
+      out.push(await resizeImageFile(f));
     }catch(e){ console.error(e); failed++; }
   }
   if(failed) toast('มีรูปที่เปิดไม่สำเร็จ ' + failed + ' รูป กรุณาลองถ่ายหรือเลือกใหม่อีกครั้ง', true);
@@ -2262,11 +2369,7 @@ function shootInAppCamera(){
   const w0 = video.videoWidth, h0 = video.videoHeight;
   if(!w0 || !h0){ toast('กล้องยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่', true); return; }
   if(photoBucketFull(target)){ closeInAppCamera(); return; }
-  const scale = Math.min(1, 900 / w0);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(w0 * scale); canvas.height = Math.round(h0 * scale);
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  photoBucket(target).push(canvas.toDataURL('image/jpeg', 0.6));
+  photoBucket(target).push(compressToLimit(video, w0, h0));
   closeInAppCamera();
   toast('เพิ่มรูปแล้ว');
   render();
@@ -2345,6 +2448,8 @@ async function submitOrder(){
     requesterDidHash: state.didHash || '',
     requesterLineUserId: (state.myRequest && state.myRequest.status === 'approved' && state.myRequest.lineUserId) || '',
     createdAt: nowIso(), status: 'PENDING_FM', photoCount: f.photos.length,
+    // ใบที่สร้างตั้งแต่นี้ไปเก็บรูปแบบคีย์ละรูปเสมอ (ดู photoKey) ใบเก่าไม่มีธงนี้ = อ่านแบบเดิม
+    photosSplit: true,
     approvals: { fm:{status:null,by:'',at:'',note:''}, gm:{status:null,by:'',at:'',note:''} },
     assignment: { technicians:[], assignedBy:'', assignedAt:'', startDate:'', endDate:'', executionPlan:'', receivedByName:'' },
     maintRecord: null,
@@ -2362,15 +2467,16 @@ async function submitOrder(){
   // มิฉะนั้นผู้ใช้จะเห็นว่า "ส่งเรียบร้อย" ทั้งที่ข้อมูลไม่เข้าชีตจริง
   const ordersOk = await storeSet('orders', newOrders);
   if(!ordersOk){
-    toast('ส่งใบแจ้งซ่อมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    toast('ส่งใบแจ้งซ่อมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง' + storeSetErrorHint(), true);
     return;
   }
   state.orders = newOrders;
   state.counters = newCounters;
   storeSet('counters', newCounters); // best-effort, ไม่บล็อกเพราะใบแจ้งซ่อมถูกบันทึกแล้ว
+  // เขียนรูปพร้อมกันทุกใบ ไม่ไล่ทีละใบ — ผู้ใช้จึงรอเท่ากับรูปที่ช้าที่สุดใบเดียว ไม่ใช่ผลรวมทุกใบ
   if(f.photos.length){
-    const photosOk = await storeSet('photos:'+id, f.photos);
-    if(!photosOk) toast('บันทึกรูปภาพแนบไม่สำเร็จ แต่ใบแจ้งซ่อมถูกบันทึกแล้ว', true);
+    const photosOk = await savePhotosAt(id, f.photos, 0);
+    if(!photosOk) toast('บันทึกรูปภาพแนบไม่สำเร็จ แต่ใบแจ้งซ่อมถูกบันทึกแล้ว — กรุณาแนบรูปใหม่ผ่านปุ่มส่งข้อมูลเพิ่มเติม', true);
   }
 
   await pushNotification('fm', id, docNumber, `${f.urgent ? '🚨 [ด่วน] ' : ''}มีใบแจ้งซ่อมใหม่จากแผนก ${f.dept} รอการอนุมัติของท่าน`);
@@ -2414,7 +2520,7 @@ async function openDetail(id){
     list.forEach(n => { if(n.orderId === id && !n.read && notifIsMine(n)) n.read = true; });
     return list;
   });
-  const photos = await storeGet('photos:'+id);
+  const photos = await loadOrderPhotos(getOrder(id));
   // ผู้ใช้อาจกดออกจากใบนี้ไปแล้วระหว่างรอ — อย่าเอารูปของใบเก่าไปแปะทับหน้าที่กำลังดูอยู่
   if(state.selectedOrderId !== id || state.view !== 'detail') return;
   state.detailPhotos = photos || [];
@@ -2441,7 +2547,7 @@ async function persistOrders(){
 async function persistOrderChange(undo, errMsg){
   if(await persistOrders()) return true;
   try{ undo(); }catch(e){ console.error('undo failed', e); }
-  toast(errMsg || 'บันทึกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+  toast((errMsg || 'บันทึกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง') + storeSetErrorHint(), true);
   render();
   return false;
 }
@@ -2644,7 +2750,7 @@ async function resubmitInfo(id, note){
   // จึงย้ายรูปออกจากคิวแล้วจำช่วงดัชนีที่ลงไปแล้วไว้ที่ state.ui.resubmitAttached (ล้างทิ้งตอนปิดกล่อง)
   let attached = state.ui.resubmitAttached || null;   // { from, count } — ตั้งเมื่อรูปลงเซิร์ฟเวอร์สำเร็จจริงเท่านั้น
   if(newPhotos.length){
-    const existing = await storeGet('photos:'+id);
+    const existing = await loadOrderPhotos(o);
     /* undefined = ดึงไม่สำเร็จ ซึ่งคนละความหมายกับ null ที่แปลว่า "ใบนี้ยังไม่เคยมีรูป"
        โค้ดเดิมเหมาสองกรณีนี้เป็น [] แล้วเขียนทับ — เน็ตกระตุกหนเดียวตอนส่งข้อมูลเพิ่ม
        คือรูปต้นฉบับของใบหายทั้งชุดโดยไม่มีใครรู้ */
@@ -2654,13 +2760,19 @@ async function resubmitInfo(id, note){
     }
     const base = existing || [];
     const merged = base.concat(newPhotos);
-    if(!await storeSet('photos:'+id, merged)){
+    /* ใบเก่าที่ยังเก็บรูปเป็นอาร์เรย์ก้อนเดียวต้องย้ายมาเป็นคีย์ละรูปทั้งใบในคราวเดียว ไม่ใช่เขียนเฉพาะ
+       รูปใหม่ — ไม่งั้นพอติดธง photosSplit แล้ว ตัวอ่านจะหารูปเดิม (ดัชนีต้นๆ) ไม่เจอ รูปเก่าหายทันที
+       ย้ายครั้งเดียวจบ และเป็นการเขียนที่เกิดในจังหวะที่ผู้ใช้กดส่งอยู่แล้ว ไม่ได้เพิ่มการรอรอบใหม่ */
+    const writeFrom = o.photosSplit ? base.length : 0;
+    const writeList = o.photosSplit ? newPhotos : merged;
+    if(!await savePhotosAt(id, writeList, writeFrom)){
       toast('บันทึกรูปที่แนบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true);
       return;
     }
     attached = { from: base.length, count: newPhotos.length };
     state.ui.resubmitAttached = attached;
     state.ui.resubmitPhotos = [];   // ลงเซิร์ฟเวอร์แล้ว ออกจากคิวได้ กดส่งใหม่จะไม่อัปซ้ำ
+    o.photosSplit = true;
     o.photoCount = merged.length;
     if(state.selectedOrderId === id) state.detailPhotos = merged;
   }
@@ -4298,6 +4410,7 @@ function renderAdminBootstrap(){
       <button class="btn btn-outline btn-sm" onclick="recheckAccess(true)">ตรวจสอบสิทธิ์ตอนนี้</button>
     </div>
     ${checkNote}
+    ${storageCapacityNote()}
     <div class="order-actions" style="margin-top:10px;">
       <button class="btn btn-outline btn-sm" onclick="runConnectionTest()">🔍 ทดสอบการเชื่อมต่อเซิร์ฟเวอร์</button>
       ${ct && ct.url ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(ct.url)}" target="_blank" rel="noopener">เปิดคำตอบดิบ →</a>` : ''}
