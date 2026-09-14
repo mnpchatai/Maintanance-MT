@@ -230,5 +230,26 @@ console.log('\n[12] ย้ายไม่สำเร็จเพราะเน
   ok('ได้ใบครบ 5 ใบ', r.length===5, r&&r.length);
 }
 
+
+console.log('\n[13] เอกสารต้องไม่อ้างถึงไฟล์ที่ไม่มีอยู่จริง');
+{
+  /* เคยพลาดมาแล้วสองรอบ: Claude.MD อ้างหัวข้อ "Apps Script projects" ที่ไม่เคยมีอยู่จริง
+     แล้วต่อมาก็อ้าง docs/main-api.gs ตั้งแต่ก่อนที่ไฟล์นั้นจะถูกสร้าง (กดแล้วเจอ 404)
+     การ "ตั้งใจให้มากขึ้น" ไม่เคยกันเรื่องแบบนี้ได้ ต้องมีอะไรคอยจับให้ */
+  const repoRoot = path.join(HERE, '..');
+  const docs = fs.readdirSync(HERE).filter(f => f.endsWith('.md'))
+    .map(f => path.join(HERE, f))
+    .concat([path.join(repoRoot, 'Claude.MD')]);
+  let missing = [];
+  for(const doc of docs){
+    const text = fs.readFileSync(doc, 'utf8');
+    // จับ path แบบ docs/xxx.yyy ที่อยู่ใน backtick — คือรูปแบบที่ใช้อ้างไฟล์ในเอกสารชุดนี้
+    for(const m of text.matchAll(/`(docs\/[A-Za-z0-9._\-]+)`/g)){
+      if(!fs.existsSync(path.join(repoRoot, m[1]))) missing.push(path.basename(doc) + ' → ' + m[1]);
+    }
+  }
+  ok('ทุก path ที่เอกสารอ้างถึงมีไฟล์อยู่จริง', missing.length===0, missing.join(', '));
+}
+
 console.log(`\n=== ผ่าน ${pass} / ล้มเหลว ${fail} ===`);
 process.exit(fail?1:0);
