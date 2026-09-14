@@ -1,4 +1,28 @@
-const CODE_VERSION = 'v8-2026-08-26';
+const CODE_VERSION = 'v9-2026-09-14';
+
+/* v9: ฝั่งแอปเลิกเก็บใบแจ้งซ่อม "ทุกใบรวมกันในคีย์เดียว" แล้ว เพราะคีย์ 'orders' คือช่องเดียว
+   ของ Google Sheet ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 3,700 ตัวอักษร เพดานจริง
+   จึงอยู่แค่ราว 12-20 ใบ และเมื่อชนเพดาน ทุกอย่างที่ต้องเขียน orders (ส่งใบใหม่ อนุมัติ มอบหมายงาน
+   บันทึกซ่อม ตรวจรับ) ล้มเหลวพร้อมกันทั้งระบบในวินาทีเดียว — คือเหตุการณ์ 14 ก.ย. 2569
+
+   โครงสร้างใหม่ในแท็บ KV:
+     orderIndex   →  [{ i:<id>, r:<rev> }, ...]   ดัชนีเล็กๆ ใบละ ~58 ตัวอักษร
+     order:<id>   →  อ็อบเจกต์ใบนั้นทั้งใบ         ช่องละใบ (3,700 จาก 48,000 = เหลือที่ 13 เท่า)
+
+   สิ่งที่เปลี่ยนในไฟล์นี้
+   1. doPost รู้จักคีย์ order:<id> แล้ว และ "อัปเดตเฉพาะแถวของใบนั้น" ในแท็บใบแจ้งซ่อม
+      แทนการล้างแล้วเขียนใหม่ทั้งแท็บทุกครั้งแบบเดิม — เร็วกว่าเดิมมากเมื่อใบสะสมเยอะ
+      (เดิมกดอนุมัติหนึ่งครั้ง = เขียนใหม่ทุกแถวในระบบ)
+   2. เพิ่มคอลัมน์ท้ายสุด "รหัสอ้างอิงระบบ" (AD) เก็บ order.id ไว้ใช้หาแถวให้ตรงใบ
+      ต่อท้ายเท่านั้นตามกติกาเดิม คอลัมน์ A-AC ไม่ขยับ onEditDocForm_ จึงไม่กระทบ
+   3. findOrderById_ / doGet('order') อ่านจากช่อง order:<id> ตรงๆ (ถอยไปคีย์เดิมได้ถ้าไม่เจอ)
+   4. resyncAll สร้างแท็บใหม่จากแถวคีย์ order: ทั้งหมด
+   5. แก้หน้าดูรูป: ตั้งแต่ 12 ก.ย. ฝั่งแอปเก็บรูปแบบ "รูปละคีย์" (photos:<id>:<i>) แล้ว
+      แต่หน้านี้ยังอ่านแบบอาร์เรย์เดียวอยู่ ใบใหม่ๆ จึงกดดูรูปแล้วขึ้นว่าไม่มีรูปมาตลอด
+      เป็นการดริฟต์แบบเดียวกัน คือฝั่งแอปขยับแล้วฝั่งนี้ไม่ได้ขยับตาม
+
+   คีย์ 'orders' เดิมยังอยู่ครบ ไม่ถูกลบและไม่ถูกเขียนทับ ใช้เป็นข้อมูลสำรองก่อนย้ายระบบ
+   และยังเป็นทางถอยให้ใบเก่าที่เปิดจากลิงก์แจ้งเตือนก่อนที่เครื่องไหนจะย้ายข้อมูลให้ */
 
 /* v8: แก้ SPREADSHEET_ID ที่ยังชี้ไปชีตของบัญชีเก่า (1er3WPCH... เจ้าของ thtwgot@gmail.com)
    ทั้งที่ทุกคนย้ายมาแก้ชีตของบัญชีใหม่แล้ว — ทุกอย่างที่ผ่าน getSpreadsheet_() จึงอ่าน/เขียน
@@ -20,6 +44,12 @@ const NOTIFS_SHEET = 'การแจ้งเตือน';
 const PERMISSIONS_SHEET = 'สิทธิ์ผู้ใช้ LINE';
 const LINE_RECIPIENTS_SHEET = 'แจ้งเตือน LINE - ผู้รับ';
 const ERROR_LOG_SHEET = 'บันทึกข้อผิดพลาด';
+
+// v9: ที่เก็บใบแจ้งซ่อมแบบใบละช่อง — ต้องตรงกับ ORDER_INDEX_KEY/orderKey() ใน index.html
+const ORDER_INDEX_KEY = 'orderIndex';
+const ORDER_KEY_PREFIX = 'order:';
+// 'orderIndex' ไม่มี 'order:' อยู่ข้างใน จึงไม่ถูกจับผิดเป็นคีย์ของใบ
+function isOrderKey_(key) { return String(key || '').indexOf(ORDER_KEY_PREFIX) === 0; }
 
 const STATUS_LABEL = {
   PENDING_FM: 'รออนุมัติ (ผจก.โรงงาน)',
@@ -246,9 +276,30 @@ function headersNeedRepair_(sheet, headers) {
   return /^(คอลัมน์|Column)\s*\d+$/i.test(String(current[0]).trim());
 }
 
+/* v9: กันกรณีแท็บมีคอลัมน์น้อยกว่าที่จะเขียน — เกิดขึ้นทุกครั้งที่เพิ่มคอลัมน์ใหม่ต่อท้าย
+   (แท็บเดิมกว้าง 29 คอลัมน์ แต่ v9 เขียน 30) ถ้าไม่ขยายก่อน setValues จะ throw ทั้งรอบ */
+function ensureColumns_(sheet, needed) {
+  const have = sheet.getMaxColumns();
+  if (have < needed) sheet.insertColumnsAfter(have, needed - have);
+}
+
+/* v9: เติมชื่อหัวตารางเฉพาะช่องที่ "ว่างอยู่จริง" เท่านั้น
+   headersNeedRepair_ เขียนหัวตารางใหม่ทั้งแถวก็ต่อเมื่อแถว 1 ว่างทั้งแถวหรือเป็นชื่อ default
+   ซึ่งแปลว่าแท็บที่ใช้งานอยู่จะ "ไม่มีวัน" ได้ชื่อของคอลัมน์ที่เพิ่มใหม่เลย (ข้อมูลมี 30 ช่อง
+   แต่หัวตารางค้างที่ 29) — ตรงนี้จึงเติมให้เฉพาะช่องว่าง ชื่อที่ผู้ใช้ตั้งเองไม่ถูกแตะ */
+function ensureTrailingHeaders_(sheet, headers) {
+  const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  for (let i = 0; i < headers.length; i++) {
+    if (String(current[i]).trim() === '') sheet.getRange(1, i + 1).setValue(headers[i]);
+  }
+}
+
 function writeSheet_(sheet, headers, rows) {
+  ensureColumns_(sheet, headers.length);
   if (headersNeedRepair_(sheet, headers)) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  } else {
+    ensureTrailingHeaders_(sheet, headers);
   }
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
@@ -421,13 +472,27 @@ function readLineRecipients_() {
 
 /* ---------- ใบแจ้งซ่อม / การแจ้งเตือน: แอปเป็นเจ้าของข้อมูล, Sheet เป็นสำเนาแสดงผล ---------- */
 
-function syncOrdersSheet_(orders) {
-  const headers = [
-    'เลขที่เอกสาร', 'แผนก', 'รหัสเครื่องจักร', 'ชื่อเครื่องจักร', 'อาการ/สาเหตุ', 'วันที่ต้องการใช้งาน', 'ผู้แจ้ง', 'แจ้งเมื่อ', 'สถานะ', 'อนุมัติผจก.โรงงาน', 'โดย/เมื่อ (ผจก.โรงงาน)', 'หมายเหตุ (ผจก.โรงงาน)', 'อนุมัติผจก.ทั่วไป', 'โดย/เมื่อ (ผจก.ทั่วไป)', 'หมายเหตุ (ผจก.ทั่วไป)', 'ช่างผู้รับผิดชอบ', 'วันที่เริ่มงาน', 'วันที่คาดว่าจะเสร็จ', 'มอบหมายโดย', 'มอบหมายเมื่อ', 'จำนวนรูปภาพ',
-    // --- v5: ฟิลด์ใหม่ (ต่อท้ายเท่านั้น — ห้ามแทรกคั่นกลาง ดูหมายเหตุด้านบน) ---
-    'ประเภทเอกสาร', 'ผู้รับใบแจ้งซ่อม', 'การดำเนินงาน', 'วิเคราะห์สาเหตุ/อาการที่ชำรุด', 'ความคิดเห็นของช่างผู้ตรวจสอบ', 'รายการอะไหล่/วัสดุที่ใช้', 'ผลการตรวจสอบของผู้แจ้ง (ล่าสุด)', 'ประวัติตรวจสอบไม่ผ่าน'
-  ];
+/* หัวตารางของแท็บ "ใบแจ้งซ่อม"
+   v9: เพิ่มคอลัมน์ที่ 30 (AD) "รหัสอ้างอิงระบบ" เก็บ order.id ไว้ — จำเป็นเพราะตอนนี้เขียนทีละแถว
+   จึงต้องหาให้เจอว่าใบนี้อยู่แถวไหน เลขที่เอกสารใช้แทนได้ไม่สนิท (ใบเก่าบางใบเก็บคนละรูปแบบ
+   ดู findOrderRowByDocNumber_) ต่อท้ายเท่านั้นตามกติกาเดิม A-AC ไม่ขยับ */
+const ORDERS_HEADERS = [
+  'เลขที่เอกสาร', 'แผนก', 'รหัสเครื่องจักร', 'ชื่อเครื่องจักร', 'อาการ/สาเหตุ', 'วันที่ต้องการใช้งาน', 'ผู้แจ้ง', 'แจ้งเมื่อ', 'สถานะ', 'อนุมัติผจก.โรงงาน', 'โดย/เมื่อ (ผจก.โรงงาน)', 'หมายเหตุ (ผจก.โรงงาน)', 'อนุมัติผจก.ทั่วไป', 'โดย/เมื่อ (ผจก.ทั่วไป)', 'หมายเหตุ (ผจก.ทั่วไป)', 'ช่างผู้รับผิดชอบ', 'วันที่เริ่มงาน', 'วันที่คาดว่าจะเสร็จ', 'มอบหมายโดย', 'มอบหมายเมื่อ', 'จำนวนรูปภาพ',
+  // --- v5: ฟิลด์ใหม่ (ต่อท้ายเท่านั้น — ห้ามแทรกคั่นกลาง ดูหมายเหตุด้านบน) ---
+  'ประเภทเอกสาร', 'ผู้รับใบแจ้งซ่อม', 'การดำเนินงาน', 'วิเคราะห์สาเหตุ/อาการที่ชำรุด', 'ความคิดเห็นของช่างผู้ตรวจสอบ', 'รายการอะไหล่/วัสดุที่ใช้', 'ผลการตรวจสอบของผู้แจ้ง (ล่าสุด)', 'ประวัติตรวจสอบไม่ผ่าน',
+  // --- v9 ---
+  'รหัสอ้างอิงระบบ'
+];
+/* F(6) วันที่ต้องการใช้งาน, H(8) แจ้งเมื่อ, K(11)/N(14) โดย/เมื่อ, Q(17) วันที่เริ่มงาน,
+   R(18) วันที่คาดว่าจะเสร็จ, T(20) มอบหมายเมื่อ, AB(28) ผลตรวจสอบล่าสุด, AC(29) ประวัติตรวจสอบไม่ผ่าน
+   — คอลัมน์สตริงวันที่แบบไทย (หรือมีวันที่แบบไทยฝังอยู่) เก็บเป็นข้อความล้วนทั้งหมด
+   (U/21 "จำนวนรูปภาพ" เป็นสูตร HYPERLINK หรือตัวเลขล้วน และ AD/30 เป็นรหัสอ้างอิง จึงไม่อยู่ในลิสต์นี้) */
+const ORDERS_TEXT_COLUMNS = [6, 8, 11, 14, 17, 18, 20, 28, 29];
+const ORDERS_ID_COLUMN = 30;
 
+/* ข้อมูลประกอบที่ใช้ร่วมกันทุกแถว (ตารางค้นหาเครื่องจักรสำหรับสูตร HYPERLINK + URL ของ deployment)
+   แยกออกมาเพื่อให้สร้างครั้งเดียวแล้วใช้ได้ทั้งตอนเขียนทั้งแท็บและตอนเขียนทีละแถว */
+function ordersRowContext_() {
   const machinesSheet = getSpreadsheet_().getSheetByName(MACHINES_SHEET);
   const machineRowByCode = {};
   let machinesGid = null;
@@ -439,83 +504,136 @@ function syncOrdersSheet_(orders) {
       if (code) machineRowByCode[code] = i + 1;
     }
   }
-
   // v6: URL ของ deployment ปัจจุบัน ใช้สร้างลิงก์ดูรูปภาพ (ว่างได้ถ้ารันนอกบริบท Web App —
   // ตอนนั้นคอลัมน์รูปภาพจะกลับไปโชว์แค่ตัวเลขจำนวนรูปเหมือนเดิม ไม่ throw)
-  const webAppUrl = ScriptApp.getService().getUrl() || '';
+  return { machineRowByCode: machineRowByCode, machinesGid: machinesGid, webAppUrl: ScriptApp.getService().getUrl() || '' };
+}
 
+// แปลงใบแจ้งซ่อมหนึ่งใบเป็นแถวของแท็บ (ความยาวต้องเท่ากับ ORDERS_HEADERS เสมอ)
+function buildOrderRow_(o, ctx) {
+  let machineCodeCell = o.machineCode;
+  if (ctx.machinesGid !== null && ctx.machineRowByCode[o.machineCode]) {
+    machineCodeCell = '=HYPERLINK("#gid=' + ctx.machinesGid + '&range=A' + ctx.machineRowByCode[o.machineCode] + '","' + o.machineCode + '")';
+  }
+  // รองรับทั้งข้อมูลเก่า (assignment.technician เดี่ยว) และใหม่ (assignment.technicians หลายคน)
+  const techsList = o.assignment && o.assignment.technicians && o.assignment.technicians.length
+    ? o.assignment.technicians.join(', ')
+    : (o.assignment ? (o.assignment.technician || '') : '');
+
+  const photoCount = o.photoCount || 0;
+  // v6: ถ้ามีรูปและรู้ URL ของ deployment → ทำเป็นลิงก์เปิดหน้าเว็บที่โชว์รูปทั้งหมดในลิงก์เดียว
+  // (renderPhotosPage_ รองรับทั้งรูปละคีย์แบบใหม่และอาร์เรย์เดียวแบบเก่า) ไม่มีรูป/ไม่รู้ URL → ตัวเลขเฉยๆ
+  const photoCell = (photoCount && ctx.webAppUrl)
+    ? '=HYPERLINK("' + ctx.webAppUrl + '?view=photos&id=' + o.id + '","' + photoCount + ' รูป (ดูรูป)")'
+    : photoCount;
+
+  const docTypeLabel = o.docType ? (DOC_TYPE_LABEL[o.docType] || o.docType) : '';
+  const receivedByName = o.assignment ? (o.assignment.receivedByName || '') : '';
+  const executionPlanLabel = o.assignment && o.assignment.executionPlan
+    ? (EXECUTION_PLAN_LABEL[o.assignment.executionPlan] || o.assignment.executionPlan) : '';
+  const causeAnalysis = o.maintRecord ? (o.maintRecord.causeAnalysis || '') : '';
+  const inspectorOpinionLabel = o.maintRecord && o.maintRecord.inspectorOpinion
+    ? (INSPECTOR_OPINION_LABEL[o.maintRecord.inspectorOpinion] || o.maintRecord.inspectorOpinion) : '';
+  const partsText = formatParts_(o.maintRecord ? o.maintRecord.parts : []);
+  const verifyText = o.verification
+    ? (VERIFY_RESULT_LABEL[o.verification.result] || o.verification.result)
+      + (o.verification.note ? ' — ' + o.verification.note : '')
+      + (o.verification.at ? ' (' + formatDateTime_(o.verification.at) + ')' : '')
+    : '';
+  const verifyHistoryText = formatVerificationHistory_(o.verificationHistory);
+
+  return [
+    o.docNumber, o.department, machineCodeCell, o.machineName, o.cause, formatDateOnly_(o.neededDate),
+    o.requestedBy, formatDateTime_(o.createdAt), STATUS_LABEL[o.status] || o.status,
+    o.approvals && o.approvals.fm ? (APPROVAL_LABEL[o.approvals.fm.status] || '') : '',
+    o.approvals && o.approvals.fm ? [o.approvals.fm.by, formatDateTime_(o.approvals.fm.at)].filter(Boolean).join(' / ') : '',
+    o.approvals && o.approvals.fm ? o.approvals.fm.note : '',
+    o.approvals && o.approvals.gm ? (APPROVAL_LABEL[o.approvals.gm.status] || '') : '',
+    o.approvals && o.approvals.gm ? [o.approvals.gm.by, formatDateTime_(o.approvals.gm.at)].filter(Boolean).join(' / ') : '',
+    o.approvals && o.approvals.gm ? o.approvals.gm.note : '',
+    techsList,
+    o.assignment ? formatDateOnly_(o.assignment.startDate) : '',
+    o.assignment ? formatDateOnly_(o.assignment.endDate) : '',
+    o.assignment ? o.assignment.assignedBy : '',
+    o.assignment ? formatDateTime_(o.assignment.assignedAt) : '',
+    photoCell,
+    // --- v5 ---
+    docTypeLabel, receivedByName, executionPlanLabel, causeAnalysis, inspectorOpinionLabel, partsText, verifyText, verifyHistoryText,
+    // --- v9 ---
+    o.id || ''
+  ];
+}
+
+// เขียนทั้งแท็บใหม่ทั้งหมด — ใช้เฉพาะตอน resyncAll, ตอนล้างข้อมูล และเส้นทางคีย์ 'orders' เดิม
+function syncOrdersSheet_(orders) {
+  const ctx = ordersRowContext_();
   // เรียงเก่า→ใหม่ตามเวลาแจ้ง เพื่อให้ใบแจ้งซ่อมใหม่ต่อท้ายแถวล่างสุดของชีต
   const sorted = (orders || []).slice().sort((a, b) =>
     String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
-
-  const rows = sorted.map(o => {
-    let machineCodeCell = o.machineCode;
-    if (machinesGid !== null && machineRowByCode[o.machineCode]) {
-      machineCodeCell = '=HYPERLINK("#gid=' + machinesGid + '&range=A' + machineRowByCode[o.machineCode] + '","' + o.machineCode + '")';
-    }
-    // รองรับทั้งข้อมูลเก่า (assignment.technician เดี่ยว) และใหม่ (assignment.technicians หลายคน)
-    const techsList = o.assignment && o.assignment.technicians && o.assignment.technicians.length
-      ? o.assignment.technicians.join(', ')
-      : (o.assignment ? (o.assignment.technician || '') : '');
-
-    const photoCount = o.photoCount || 0;
-    // v6: ถ้ามีรูปและรู้ URL ของ deployment → ทำเป็นลิงก์เปิดหน้าเว็บที่โชว์รูปทั้งหมดในลิงก์เดียว
-    // (renderPhotosPage_ อ่านจาก KV คีย์ photos:<orderId> ตรงๆ) ไม่มีรูปหรือไม่รู้ URL → โชว์ตัวเลขเฉยๆ
-    const photoCell = (photoCount && webAppUrl)
-      ? '=HYPERLINK("' + webAppUrl + '?view=photos&id=' + o.id + '","' + photoCount + ' รูป (ดูรูป)")'
-      : photoCount;
-
-    const docTypeLabel = o.docType ? (DOC_TYPE_LABEL[o.docType] || o.docType) : '';
-    const receivedByName = o.assignment ? (o.assignment.receivedByName || '') : '';
-    const executionPlanLabel = o.assignment && o.assignment.executionPlan
-      ? (EXECUTION_PLAN_LABEL[o.assignment.executionPlan] || o.assignment.executionPlan) : '';
-    const causeAnalysis = o.maintRecord ? (o.maintRecord.causeAnalysis || '') : '';
-    const inspectorOpinionLabel = o.maintRecord && o.maintRecord.inspectorOpinion
-      ? (INSPECTOR_OPINION_LABEL[o.maintRecord.inspectorOpinion] || o.maintRecord.inspectorOpinion) : '';
-    const partsText = formatParts_(o.maintRecord ? o.maintRecord.parts : []);
-    const verifyText = o.verification
-      ? (VERIFY_RESULT_LABEL[o.verification.result] || o.verification.result)
-        + (o.verification.note ? ' — ' + o.verification.note : '')
-        + (o.verification.at ? ' (' + formatDateTime_(o.verification.at) + ')' : '')
-      : '';
-    const verifyHistoryText = formatVerificationHistory_(o.verificationHistory);
-
-    return [
-      o.docNumber, o.department, machineCodeCell, o.machineName, o.cause, formatDateOnly_(o.neededDate),
-      o.requestedBy, formatDateTime_(o.createdAt), STATUS_LABEL[o.status] || o.status,
-      o.approvals && o.approvals.fm ? (APPROVAL_LABEL[o.approvals.fm.status] || '') : '',
-      o.approvals && o.approvals.fm ? [o.approvals.fm.by, formatDateTime_(o.approvals.fm.at)].filter(Boolean).join(' / ') : '',
-      o.approvals && o.approvals.fm ? o.approvals.fm.note : '',
-      o.approvals && o.approvals.gm ? (APPROVAL_LABEL[o.approvals.gm.status] || '') : '',
-      o.approvals && o.approvals.gm ? [o.approvals.gm.by, formatDateTime_(o.approvals.gm.at)].filter(Boolean).join(' / ') : '',
-      o.approvals && o.approvals.gm ? o.approvals.gm.note : '',
-      techsList,
-      o.assignment ? formatDateOnly_(o.assignment.startDate) : '',
-      o.assignment ? formatDateOnly_(o.assignment.endDate) : '',
-      o.assignment ? o.assignment.assignedBy : '',
-      o.assignment ? formatDateTime_(o.assignment.assignedAt) : '',
-      photoCell,
-      // --- v5 ---
-      docTypeLabel, receivedByName, executionPlanLabel, causeAnalysis, inspectorOpinionLabel, partsText, verifyText, verifyHistoryText
-    ];
-  });
-  // F(6) วันที่ต้องการใช้งาน, H(8) แจ้งเมื่อ, K(11)/N(14) โดย/เมื่อ, Q(17) วันที่เริ่มงาน,
-  // R(18) วันที่คาดว่าจะเสร็จ, T(20) มอบหมายเมื่อ, AB(28) ผลตรวจสอบล่าสุด, AC(29) ประวัติตรวจสอบไม่ผ่าน
-  // — คอลัมน์สตริงวันที่แบบไทย (หรือขึ้นต้น/มีวันที่แบบไทยฝังอยู่) เก็บเป็นข้อความล้วนทั้งหมด
-  // (คอลัมน์ U/21 "จำนวนรูปภาพ" เป็นสูตร =HYPERLINK(...) หรือตัวเลขล้วน ไม่ใช่ข้อความวันที่ จึงไม่ต้องเติมในลิสต์นี้)
-  clearAndWriteSheet_(ORDERS_SHEET, headers, rows, [6, 8, 11, 14, 17, 18, 20, 28, 29]);
+  const rows = sorted.map(o => buildOrderRow_(o, ctx));
+  clearAndWriteSheet_(ORDERS_SHEET, ORDERS_HEADERS, rows, ORDERS_TEXT_COLUMNS);
   try {
     applyOrdersDropdowns_(rows.length);
     applyOrdersColors_(rows.length);
   } catch (e) { logSyncError_('ordersFormatting', e); }
 }
 
+/* v9: อัปเดต "เฉพาะแถวของใบนี้" แทนการล้างแล้วเขียนใหม่ทั้งแท็บ
+   เดิมการกดอนุมัติหนึ่งครั้ง = เขียนทุกแถวในระบบใหม่หมด ยิ่งใบเยอะยิ่งช้าแบบทบต้น
+   ตอนนี้แอปส่งมาทีละใบอยู่แล้ว (คีย์ order:<id>) จึงเขียนแค่แถวเดียวพอ
+   ใบใหม่ที่ยังไม่มีแถว → ต่อท้ายแถวล่างสุด ซึ่งตรงกับการเรียงเก่า→ใหม่ของแท็บนี้พอดี */
+function syncOneOrderRow_(order) {
+  if (!order || !order.id) return;
+  const sheet = getOrCreateSheet_(ORDERS_SHEET, ORDERS_HEADERS);
+  ensureColumns_(sheet, ORDERS_HEADERS.length);
+  ensureTrailingHeaders_(sheet, ORDERS_HEADERS);
+  const row = prepTextColumns_([buildOrderRow_(order, ordersRowContext_())], ORDERS_TEXT_COLUMNS)[0];
+
+  const found = findOrderSheetRow_(sheet, order.id, order.docNumber);
+  if (found > 0) {
+    sheet.getRange(found, 1, 1, row.length).setValues([row]);
+    return;   // แถวเดิมมีดรอปดาวน์/สีอยู่แล้ว ไม่ต้องลงรูปแบบซ้ำ
+  }
+  const newRow = sheet.getLastRow() + 1;
+  sheet.getRange(newRow, 1, 1, row.length).setValues([row]);
+  try {
+    applyOrdersDropdowns_(1, newRow);              // ดรอปดาวน์: เฉพาะแถวที่เพิ่งเพิ่ม
+    applyOrdersColors_(sheet.getLastRow() - 1);    // สี: setConditionalFormatRules แทนที่กฎเดิมทั้งหมด จึงต้องครอบทั้งช่วง
+  } catch (e) { logSyncError_('ordersFormatting', e); }
+}
+
+/* หาว่าใบนี้อยู่แถวไหนของแท็บ — ดูจาก "รหัสอ้างอิงระบบ" (AD) ก่อน
+   ไม่เจอค่อยถอยไปเทียบเลขที่เอกสาร (A) สำหรับแถวเก่าที่เขียนไว้ก่อนมีคอลัมน์ AD
+   คืน -1 เมื่อไม่พบ = ใบใหม่ ต้องต่อท้าย */
+function findOrderSheetRow_(sheet, orderId, docNumber) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  if (orderId && sheet.getMaxColumns() >= ORDERS_ID_COLUMN) {
+    const ids = sheet.getRange(2, ORDERS_ID_COLUMN, lastRow - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === orderId) return i + 2;
+    }
+  }
+  if (docNumber) {
+    const docs = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    const want = String(docNumber).trim().toUpperCase();
+    for (let i = 0; i < docs.length; i++) {
+      if (String(docs[i][0]).trim().toUpperCase() === want) return i + 2;
+    }
+  }
+  return -1;
+}
+
 /* คอลัมน์ที่เป็นค่าจำกัดตัวเลือก (enum) ทำเป็นเมนูแบบเลื่อนลง:
    I สถานะ, J/M อนุมัติผจก.โรงงาน/ทั่วไป, V ประเภทเอกสาร, X การดำเนินงาน, Z ความคิดเห็นของช่างผู้ตรวจสอบ
    ส่วน K/L/N/W/Y/AA/AB/AC เป็นข้อความอิสระ (ชื่อ-เวลา/หมายเหตุ/บันทึกยาว) จึงไม่ทำเป็นดรอปดาวน์ */
-function applyOrdersDropdowns_(rowCount) {
+function applyOrdersDropdowns_(rowCount, startRow) {
   const sheet = getSpreadsheet_().getSheetByName(ORDERS_SHEET);
   if (!sheet || rowCount < 1) return;
+  /* v9: ลงดรอปดาวน์เฉพาะช่วงที่ต้องการได้ ไม่ต้องไล่ทั้งตารางทุกครั้ง
+     ตอนย้ายข้อมูลครั้งแรกจะมีใบไหลเข้ามารัวๆ ทีละใบ ถ้าแต่ละใบไปลงรูปแบบใหม่ทั้งตาราง
+     คำขอที่ต่อคิวรอ LockService อยู่จะรอเกิน waitLock(10000) แล้วล้มทั้งรอบ */
+  const first = startRow || 2;
 
   const statusRule = SpreadsheetApp.newDataValidation().requireValueInList(STATUS_OPTIONS, true).setAllowInvalid(true).build();
   const approvalRule = SpreadsheetApp.newDataValidation().requireValueInList(APPROVAL_OPTIONS, true).setAllowInvalid(true).build();
@@ -523,12 +641,12 @@ function applyOrdersDropdowns_(rowCount) {
   const executionPlanRule = SpreadsheetApp.newDataValidation().requireValueInList(EXECUTION_PLAN_OPTIONS, true).setAllowInvalid(true).build();
   const inspectorOpinionRule = SpreadsheetApp.newDataValidation().requireValueInList(INSPECTOR_OPINION_OPTIONS, true).setAllowInvalid(true).build();
 
-  sheet.getRange(2, 9, rowCount, 1).setDataValidation(statusRule);    // I: สถานะ
-  sheet.getRange(2, 10, rowCount, 1).setDataValidation(approvalRule); // J: อนุมัติผจก.โรงงาน
-  sheet.getRange(2, 13, rowCount, 1).setDataValidation(approvalRule); // M: อนุมัติผจก.ทั่วไป
-  sheet.getRange(2, 22, rowCount, 1).setDataValidation(docTypeRule);          // V: ประเภทเอกสาร
-  sheet.getRange(2, 24, rowCount, 1).setDataValidation(executionPlanRule);    // X: การดำเนินงาน
-  sheet.getRange(2, 26, rowCount, 1).setDataValidation(inspectorOpinionRule); // Z: ความคิดเห็นของช่างผู้ตรวจสอบ
+  sheet.getRange(first, 9, rowCount, 1).setDataValidation(statusRule);    // I: สถานะ
+  sheet.getRange(first, 10, rowCount, 1).setDataValidation(approvalRule); // J: อนุมัติผจก.โรงงาน
+  sheet.getRange(first, 13, rowCount, 1).setDataValidation(approvalRule); // M: อนุมัติผจก.ทั่วไป
+  sheet.getRange(first, 22, rowCount, 1).setDataValidation(docTypeRule);          // V: ประเภทเอกสาร
+  sheet.getRange(first, 24, rowCount, 1).setDataValidation(executionPlanRule);    // X: การดำเนินงาน
+  sheet.getRange(first, 26, rowCount, 1).setDataValidation(inspectorOpinionRule); // Z: ความคิดเห็นของช่างผู้ตรวจสอบ
 }
 
 function applyOrdersColors_(rowCount) {
@@ -574,14 +692,51 @@ function applyNotificationsColors_(rowCount) {
 
 /* ---------- v6: หน้าเว็บดูรูปภาพประกอบ (ทุกรูปของใบแจ้งซ่อมเดียวกัน แสดงในลิงก์เดียว) ---------- */
 
-// หา docNumber ของใบแจ้งซ่อมจาก orderId (แค่ไว้ทำหัวข้อหน้าให้อ่านง่าย — ไม่เจอก็ไม่เป็นไร)
+/* คืนใบแจ้งซ่อมใบเดียวจาก orderId
+   v9: อ่านจากช่องของใบนั้นตรงๆ (order:<id>) — เร็วกว่าเดิมมากเพราะไม่ต้องลากใบทั้งระบบมา parse
+   ถ้าไม่มีช่องนั้น = ใบเก่าที่ยังไม่ถูกย้ายระบบ ค่อยถอยไปค้นในคีย์ 'orders' เดิมซึ่งยังอ่านได้
+   (เขียนไม่ได้แล้วเพราะล้นเพดานช่อง แต่การอ่านไม่เกี่ยวกับเพดาน) */
 function findOrderById_(orderId) {
+  if (!orderId) return null;
   try {
-    const raw = getKvValue_('orders');
-    if (!raw) return null;
-    const orders = JSON.parse(raw);
+    const raw = getKvValue_(ORDER_KEY_PREFIX + orderId);
+    if (raw) {
+      const one = JSON.parse(raw);
+      if (one && one.id) return one;
+    }
+  } catch (e) { logSyncError_('findOrderById_:' + orderId, e); }
+  try {
+    const legacy = getKvValue_('orders');
+    if (!legacy) return null;
+    const orders = JSON.parse(legacy);
     return orders.find(function (o) { return o.id === orderId; }) || null;
   } catch (e) { return null; }
+}
+
+/* รูปภาพของใบแจ้งซ่อม — รองรับทั้งสองรูปแบบ
+   ใหม่ (ตั้งแต่ 12 ก.ย. 2569): รูปละคีย์ photos:<id>:<ดัชนี> ใบไหนใช้แบบนี้ดูได้จากธง photosSplit
+   เก่า: ทุกรูปของใบเป็นอาร์เรย์เดียวในคีย์ photos:<id>
+   ค่าที่แอปเขียนลง KV ผ่าน JSON.stringify เสมอ รูปเดี่ยวจึงถูกเก็บเป็นสตริงที่มีเครื่องหมายคำพูด
+   ครอบอยู่ ต้อง JSON.parse ก่อนเอาไปใส่ src ไม่งั้นจะได้ data URL ที่มี " ติดหัวท้ายแล้วรูปไม่ขึ้น */
+function loadOrderPhotos_(orderId, order) {
+  const out = [];
+  if (order && order.photosSplit) {
+    const n = order.photoCount || 0;
+    for (let i = 0; i < n; i++) {
+      const raw = getKvValue_('photos:' + orderId + ':' + i);
+      if (!raw) continue;
+      try {
+        const src = JSON.parse(raw);
+        if (typeof src === 'string' && src) out.push(src);
+      } catch (e) { /* แถวเดียวเสียไม่ควรทำให้ทั้งหน้าว่างเปล่า */ }
+    }
+    return out;
+  }
+  try {
+    const raw = getKvValue_('photos:' + orderId);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(function (x) { return typeof x === 'string' && x; }) : [];
+  } catch (e) { return []; }
 }
 
 function renderPhotosPage_(orderId) {
@@ -591,13 +746,9 @@ function renderPhotosPage_(orderId) {
     );
   }
 
-  let photos = [];
-  try {
-    const raw = getKvValue_('photos:' + orderId);
-    photos = raw ? JSON.parse(raw) : [];
-  } catch (e) { photos = []; }
-
+  // ต้องรู้จักใบก่อน ถึงจะรู้ว่ารูปของใบนี้เก็บแบบไหน (ดู loadOrderPhotos_)
   const order = findOrderById_(orderId);
+  const photos = loadOrderPhotos_(orderId, order);
   const title = order ? ('รูปภาพประกอบ — ' + order.docNumber) : 'รูปภาพประกอบใบแจ้งซ่อม';
 
   const imgTags = photos.map(function (src, i) {
@@ -713,8 +864,23 @@ function doPost(e) {
     } else {
       setKvValue_(key, value);
       try {
-        if (key === 'orders') syncOrdersSheet_(JSON.parse(value));
-        else if (key === 'notifications') syncNotificationsSheet_(JSON.parse(value));
+        /* v9: แอปเขียนใบแจ้งซ่อมมาทีละใบแล้ว (order:<id>) จึงอัปเดตแค่แถวของใบนั้น
+           ส่วนคีย์ 'orders' เดิมยังรับไว้เผื่อมีอะไรเขียนมา แต่ฝั่งแอปไม่เขียนแล้ว */
+        if (isOrderKey_(key)) {
+          const one = value ? JSON.parse(value) : null;
+          // ค่า null = ช่องของใบที่ถูกลบออกจากดัชนีแล้ว ข้ามไป การล้างแถวจัดการที่ orderIndex
+          if (one && one.id) syncOneOrderRow_(one);
+        } else if (key === ORDER_INDEX_KEY) {
+          /* ดัชนีว่าง = ผู้ดูแลกดล้างข้อมูลทั้งระบบ (ฝั่งแอปเขียนดัชนีว่างก่อนเสมอ แล้วค่อยล้างช่องของแต่ละใบ)
+             เป็นจังหวะเดียวที่รู้ได้ว่า "ใบหายไปแล้ว" จึงล้างแท็บที่นี่
+             ดัชนีที่ไม่ว่างไม่ต้องทำอะไร เพราะแต่ละใบซิงก์ผ่านคีย์ order:<id> ของตัวเองอยู่แล้ว */
+          const idx = value ? JSON.parse(value) : null;
+          if (Array.isArray(idx) && idx.length === 0) syncOrdersSheet_([]);
+        } else if (key === 'orders') {
+          syncOrdersSheet_(JSON.parse(value));
+        } else if (key === 'notifications') {
+          syncNotificationsSheet_(JSON.parse(value));
+        }
       } catch (syncErr) {
         // mirror sync failing shouldn't break saving — but log it so it's not a silent, undebuggable drift
         logSyncError_('doPost:' + key, syncErr);
@@ -731,17 +897,34 @@ function resyncAll() {
   // ประทับตราเวอร์ชันลง log ทุกครั้งที่รัน — เพื่อพิสูจน์ว่าโค้ดตัวไหนกำลังรันอยู่จริง
   // v8: ประทับ id ของชีตที่ใช้จริงลงไปด้วย จะได้เห็นทันทีถ้า SPREADSHEET_ID ชี้ผิดไฟล์
   logSyncError_('resyncAll:start', 'โค้ดเวอร์ชัน ' + CODE_VERSION + ' · ชีต ' + getSpreadsheet_().getId());
+  /* อ่านทั้งแท็บ KV รวดเดียว — หนักเพราะลากค่าของคีย์รูปภาพมาด้วย แต่ฟังก์ชันนี้เป็นงานที่สั่งมือ
+     นานๆ ครั้ง ไม่ได้อยู่ในเส้นทางที่ผู้ใช้ต้องรอ จึงแลกความง่ายกับความเร็วตรงนี้ได้
+     (เส้นทางปกติของผู้ใช้ไม่เคยอ่านทั้งแท็บ ดู findRow_) */
   const kvSheet = getKvSheet_();
   const data = kvSheet.getDataRange().getValues();
+  const orders = [];
+  let legacyOrders = null, notifs = null;
   for (let i = 1; i < data.length; i++) {
     const key = data[i][0], value = data[i][1];
     if (!value) continue;
     try {
-      if (key === 'orders') syncOrdersSheet_(JSON.parse(value));
-      else if (key === 'notifications') syncNotificationsSheet_(JSON.parse(value));
+      if (isOrderKey_(key)) {
+        const one = JSON.parse(value);
+        if (one && one.id) orders.push(one);
+      }
+      else if (key === 'orders') legacyOrders = value;
+      else if (key === 'notifications') notifs = value;
     } catch (e) { logSyncError_('resyncAll:' + key, e); }
   }
-  logSyncError_('resyncAll:done', 'เสร็จสิ้น (' + CODE_VERSION + ')');
+  try {
+    // ที่เก็บใหม่ชนะเสมอถ้ามีข้อมูล — คีย์ 'orders' เดิมเป็นแค่ข้อมูลสำรองก่อนย้ายระบบ
+    if (orders.length) syncOrdersSheet_(orders);
+    else if (legacyOrders) syncOrdersSheet_(JSON.parse(legacyOrders));
+  } catch (e) { logSyncError_('resyncAll:orders', e); }
+  try {
+    if (notifs) syncNotificationsSheet_(JSON.parse(notifs));
+  } catch (e) { logSyncError_('resyncAll:notifications', e); }
+  logSyncError_('resyncAll:done', 'เสร็จสิ้น (' + CODE_VERSION + ') · ใบแจ้งซ่อม ' + (orders.length || 0) + ' ใบจากที่เก็บใหม่');
 }
 
 const DOC_FORM_SHEET_NAME = 'เอกสาร';
@@ -837,24 +1020,44 @@ function setDocFormSignoffDates_(sheet, ddmmyy) {
   });
 }
 
-// ดึงออเดอร์เต็มจาก KV!orders ตรงๆ ผ่าน getActiveSpreadsheet() (ห้ามใช้ getKvValue_/openById
-// ตรงนี้ — onEdit เป็น simple trigger ถูกจำกัดสิทธิ์ไม่ให้เปิดสเปรดชีตด้วย openById)
-function findOrderByDocNumber_(docNumber) {
+/* อ่านค่าคีย์เดียวจากแท็บ KV ผ่านชีตที่เปิดอยู่ (getActiveSpreadsheet)
+   ห้ามใช้ getKvValue_ ตรงนี้ — onEdit เป็น simple trigger ถูกจำกัดสิทธิ์ไม่ให้เปิดสเปรดชีตด้วย openById
+   v9: อ่านเฉพาะคอลัมน์ A มาหาแถวก่อน แล้วค่อยดึงค่าเซลล์เดียว (หลักเดียวกับ findRow_)
+   ของเดิมใช้ getDataRange() ซึ่งลากค่าของทุกคีย์รวมถึงรูป base64 ทั้งระบบเข้ามา ทุกครั้งที่มีคนพิมพ์
+   เลขที่เอกสารลงฟอร์ม — ยิ่งรูปสะสมเยอะยิ่งช้า และ simple trigger มีเวลาจำกัดกว่าปกติด้วย */
+function readKvValueActive_(kv, key) {
+  const lastRow = kv.getLastRow();
+  if (lastRow < 2) return null;
+  const keys = kv.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < keys.length; i++) {
+    if (keys[i][0] === key) return kv.getRange(i + 2, 2).getValue();
+  }
+  return null;
+}
+
+/* ดึงใบแจ้งซ่อมเต็มใบมาเติมฟอร์มกระดาษ
+   v9: ใช้ "รหัสอ้างอิงระบบ" (คอลัมน์ AD ของแท็บใบแจ้งซ่อม) อ่านช่อง order:<id> ตรงๆ
+   ถ้าแถวนั้นยังไม่มีรหัส (ใบเก่าที่เขียนไว้ก่อนมีคอลัมน์นี้) ค่อยถอยไปค้นในคีย์ 'orders' เดิม */
+function findOrderForDocForm_(docNumber, orderId) {
   try {
     const kv = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(KV_SHEET);
     if (!kv) return null;
-    const data = kv.getDataRange().getValues();
-    let raw = null;
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === 'orders') { raw = data[i][1]; break; }
+    if (orderId) {
+      const raw = readKvValueActive_(kv, ORDER_KEY_PREFIX + orderId);
+      if (raw) {
+        try {
+          const one = JSON.parse(raw);
+          if (one && one.id) return one;
+        } catch (e) { /* ค่าเสีย — ตกไปใช้ทางถอยด้านล่าง */ }
+      }
     }
-    if (!raw) return null;
-    const orders = JSON.parse(raw);
-    const target = docNumber.toUpperCase();
+    const legacy = readKvValueActive_(kv, 'orders');
+    if (!legacy) return null;
+    const orders = JSON.parse(legacy);
+    const target = String(docNumber).toUpperCase();
     return orders.find(function (o) { return String(o.docNumber || '').toUpperCase() === target; }) || null;
   } catch (e) {
-    logSyncError_('findOrderByDocNumber_', e);
-    return null;
+    return null;   // เติมฟอร์มไม่ได้ ดีกว่าทำให้การแก้เซลล์ค้าง — ช่องที่เหลือยังเติมจากแท็บได้ตามปกติ
   }
 }
 
@@ -910,7 +1113,10 @@ function onEditDocForm_(e) {
   sheet.getRange(m.fmDate).setValue(extractDdMmYy_(fmByAt));
   sheet.getRange(m.gmDate).setValue(extractDdMmYy_(gmByAt));
 
-  const order = findOrderByDocNumber_(docNumber);
+  // v9: คอลัมน์ AD เก็บ order.id ไว้ ใช้เปิดช่อง order:<id> ได้ตรงใบโดยไม่ต้องค้นทั้งระบบ
+  const orderId = row.length >= ORDERS_ID_COLUMN && row[ORDERS_ID_COLUMN - 1]
+    ? String(row[ORDERS_ID_COLUMN - 1]).trim() : '';
+  const order = findOrderForDocForm_(docNumber, orderId);
   const verifyResult = order && order.verification ? order.verification.result : '';
   const signoffDate = order && order.verification && order.verification.at
     ? formatDdMmYyFromIso_(order.verification.at) : '';

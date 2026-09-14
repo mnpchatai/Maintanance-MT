@@ -44,13 +44,19 @@ Both Apps Script projects live in Google's account, not in this git repo.
 Their source is only ever pasted by hand into the Apps Script editor, and always
 paste the entire file, replacing everything (partial pastes have broken
 things before by deleting helper functions).
-**Only the LINE relay's source is in this repo** (`docs/line-relay.gs`). The
-"คำร้องแจ้งซ่อม" (main data API) source is *not* — an earlier version of this
-file claimed an "Apps Script projects" section below held the full source of
-each; no such section ever existed. Paste that project's source into
-`docs/main-api.gs` when next opening the Apps Script editor, so the mirror can be
-changed without guessing at columns, HYPERLINK formulas, validation and the Thai
-date formatting it applies.
+**Both projects' sources now live in this repo** — `docs/line-relay.gs` (LINE
+relay) and `docs/main-api.gs` (main data API, added 14 Sep 2026). An earlier
+version of this file claimed an "Apps Script projects" section below held them;
+no such section ever existed, so every change to the server side had to be made
+by guessing at what it did. `docs/order-store.test.mjs` now fails the build if a file
+path named in these docs does not exist, because that mistake was made twice.
+Neither file runs from the repo: they are pasted by hand into the Apps Script
+editor. A commit here changes nothing in production until that paste happens, so
+**when `docs/main-api.gs` changes, say so explicitly** — and `?key=version`
+returning the old `CODE_VERSION` is how to tell it has not been pasted yet.
+`docs/main-api.test.mjs` runs that file against a fake `SpreadsheetApp`
+(`node docs/main-api.test.mjs`, no dependencies, reads `main-api.gs` live), which
+is the only way to exercise it outside Google's servers.
 1. `index.html` — the client
 Constants near the top: `API_URL` (main data API), `SHEET_URL` (link
 shown in Settings), `APP_URL` (used to build notification deep links) and
@@ -534,10 +540,17 @@ Two things were hitting that ceiling:
   one response, which also removes the per-order fan-out on a cold load.
   The old `orders` key is deliberately left in place, neither read (except during
   migration) nor written: it is the pre-migration backup, and it is over the cell
-  limit anyway. **Consequence: the ใบแจ้งซ่อม tab is frozen** at its last
-  successful sync, because the Apps Script mirror still rebuilds it from that key.
-  Pointing the mirror at the `order:` rows is a hand-edit in the Apps Script
-  editor and is the one piece of this fix that does not live in this repo.
+  limit anyway.
+  The Apps Script side was updated to match in `docs/main-api.gs` v9: `doPost`
+  recognises `order:<id>` and rewrites **only that order's row** in the ใบแจ้งซ่อม
+  tab instead of clearing and rewriting every row on every approval, which is
+  strictly faster than the old behaviour and gets faster the more orders exist. A
+  new trailing column AD "รหัสอ้างอิงระบบ" holds `order.id` so a row can be found
+  again; A-AC do not move, so `onEditDocForm_`'s fixed offsets still hold. An empty
+  `orderIndex` is the one signal that orders were deleted (the client writes it
+  before blanking the cells), and that is what clears the tab. **The tab stays
+  frozen until that file is pasted into the Apps Script editor** — the repo cannot
+  deploy it.
 Two keys that look like they share the ceiling but do not: `config` is written by
 `doPost('config', ...)` as *rows* across the แผนก/เครื่องจักร/ช่าง tabs, never as one
 cell, so it is listed in `KV_UNCAPPED_KEYS` and skips the size guard — a factory

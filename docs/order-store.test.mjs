@@ -245,7 +245,10 @@ console.log('\n[13] เอกสารต้องไม่อ้างถึง
     const text = fs.readFileSync(doc, 'utf8');
     // จับ path แบบ docs/xxx.yyy ที่อยู่ใน backtick — คือรูปแบบที่ใช้อ้างไฟล์ในเอกสารชุดนี้
     for(const m of text.matchAll(/`(docs\/[A-Za-z0-9._\-]+)`/g)){
-      if(!fs.existsSync(path.join(repoRoot, m[1]))) missing.push(path.basename(doc) + ' → ' + m[1]);
+      const ref = m[1];
+      // ข้ามตัวอย่าง/ตัวแทน ไม่ใช่ชื่อไฟล์จริง เช่น docs/... หรือ docs/<ชื่อไฟล์>
+      if(ref.includes('...') || !/\.[A-Za-z0-9]+$/.test(ref)) continue;
+      if(!fs.existsSync(path.join(repoRoot, ref))) missing.push(path.basename(doc) + ' → ' + ref);
     }
   }
   ok('ทุก path ที่เอกสารอ้างถึงมีไฟล์อยู่จริง', missing.length===0, missing.join(', '));
