@@ -57,6 +57,12 @@ returning the old `CODE_VERSION` is how to tell it has not been pasted yet.
 `docs/main-api.test.mjs` runs that file against a fake `SpreadsheetApp`
 (`node docs/main-api.test.mjs`, no dependencies, reads `main-api.gs` live), which
 is the only way to exercise it outside Google's servers.
+**Waiting to be pasted right now: `docs/main-api.gs` v10 (15 Sep 2026)** — the
+whole speed fix below ("Request count is the bottleneck") is inert until it is,
+because the client asks the server for a `bundle` it does not yet know how to
+build and silently falls back to the old one-request-per-key behaviour. Check
+with `?key=version`: `v10-2026-09-15` means it is live, `v9-2026-09-14` means it
+is not. Nothing breaks while it is not pasted; the app is just as slow as before.
 1. `index.html` — the client
 Constants near the top: `API_URL` (main data API), `SHEET_URL` (link
 shown in Settings), `APP_URL` (used to build notification deep links) and
@@ -387,7 +393,9 @@ Polling: `pollForUpdates()` re-fetches `config`/`orders`/`notifications`/
 `accessRequests` and only calls `render()` if something actually changed
 (JSON-string diff) — this is how edits made directly in the Sheet
 (departments/machines/technicians) show up in the browser without a manual
-reload.
+reload. Since 15 Sep 2026 that whole round is **one** request (`bundleGet`,
+see "Request count is the bottleneck" below), plus a second one only in the
+rounds where somebody actually changed an order.
 It is driven by `startPolling()`, a `setTimeout` chain, **not**
 `setInterval`. This matters: every request is one Apps Script execution,
 and a Web App deployed *Execute as: Me* runs them all under the owner's
@@ -537,11 +545,15 @@ Two things were hitting that ceiling:
   The next ceiling is `orderIndex` itself at roughly 820 orders (~58 characters
   per entry); `storageCapacityNote()` tracks it. Retiring it means having Apps
   Script enumerate the `order:` rows in the KV tab server-side and return them in
-  one response, which also removes the per-order fan-out on a cold load.
+  one response.
+  **The per-order fan-out on a cold load is gone (15 Sep 2026)** — `?key=bundle`
+  returns the index and every order body in one response, so the index is now only
+  a size ceiling, not a latency one. See "Request count is the bottleneck" below.
   The old `orders` key is deliberately left in place, neither read (except during
   migration) nor written: it is the pre-migration backup, and it is over the cell
   limit anyway.
-  The Apps Script side was updated to match in `docs/main-api.gs` v9: `doPost`
+  The Apps Script side was updated to match in `docs/main-api.gs` v9 (now v10 —
+  see below): `doPost`
   recognises `order:<id>` and rewrites **only that order's row** in the ใบแจ้งซ่อม
   tab instead of clearing and rewriting every row on every approval, which is
   strictly faster than the old behaviour and gets faster the more orders exist. A
@@ -565,6 +577,66 @@ tighter than `orders` itself.
 per-key percentage — now `orderIndex`, the longest individual order,
 `notifications` and `accessRequests` — so whichever one is closest to the wall is
 visible before it stops the system.
+
+**Request count is the bottleneck, not data size (15 Sep 2026).**
+Every `storeGet`/`storeSet` is one Apps Script execution, and a Web App deployed
+*Execute as: Me* runs every user's request under the owner's single concurrency
+budget. What makes the app feel slow is therefore the *number of requests*, and
+the 14 Sep move to one-order-per-cell traded a hard ceiling for a request count
+that grows with the number of orders:
+
+| | before 15 Sep | after |
+|---|---|---|
+| open the app (30 orders) | 8 + 30 = 38 requests | **1** |
+| one poll round, per open tab | 4 (+1 per changed order) | **1** (+1 only if an order changed) |
+| submit one order with 2 photos | 8 requests / 6 lock acquisitions | 6 / 4 |
+| approve, assign, save a repair record | 4 / 3 | 3 / 2 |
+| open an order with 5 photos | 5 | 1 |
+| admin opens Settings | 4 | 1 |
+
+That is what the "โหลดช้า/ส่งช้า" reports were: not the old ceiling coming back,
+but the unpaid price of the fix for it. Two mechanisms, both needing
+`docs/main-api.gs` **v10**:
+
+- **Read — `?key=bundle`** (`buildBundle_` server-side, `bundleGet()` in the
+  client). `keys=` is a comma-separated list of KV keys, plus three the server
+  knows how to compute: `config` (built live from the three master tabs),
+  `userRoles` (needs `userId=`) and `lineRecipients`. `orders=*` returns
+  `orderIndex` **and** every order body; `orders=<id,id,…>` returns just those.
+  Values come back as *raw, unparsed strings* keyed exactly as asked, so the
+  transport layer cannot change what a value means — `null` still means "no such
+  key" and a failed fetch still surfaces as `undefined` (`bundleVal()`), which is
+  the invariant `loadBackground()` depends on to not unlock writes.
+  `startBoot()` fires this once at `init()` time, before `sha256Hex()` and
+  before the snapshot is painted; `storeGetBoot()`/`getUserRolesBoot()` hand each
+  key to the first caller that asks and then fall back to single requests, so
+  everything after boot still reads live data. A device with no local snapshot
+  (never had access) asks without `orders=*`: it is headed for the access-request
+  screen, which never shows orders.
+- **Write — `{batch:[{key,value},…]}` to `doPost`** (`storeSetPhases()` in the
+  client). One execution, **one** `LockService` acquisition for the whole group,
+  cells written first and mirrored to the ใบแจ้งซ่อม tab afterwards.
+  `storeSetPhases([[…bodies…],[…index…]])` is how "cells first, index last"
+  survives both paths: on v10 both phases ride in one ordered request, on an
+  older server it is the previous behaviour exactly (a phase at a time, six in
+  parallel).
+
+**The fallback is not optional and must not be removed.** `docs/main-api.gs` is
+pasted into the Apps Script editor by hand, so there is always a window where the
+client is new and the server is not. A pre-v10 server does not know `key=bundle`
+and answers `{"value":null}`; the absence of the `bundle` field is what sets
+`serverBundle = false`, after which the client uses the old one-key-at-a-time
+paths for the rest of the session. The inverse rule matters more: the client must
+**never** send a batch write to a server it has not confirmed is v10
+(`canBatchWrite()` is `serverBundle === true`, not `!== false`), because pre-v10
+`doPost` reads `body.key` off a batch request, finds `undefined`, and appends a
+junk row to the KV tab. `docs/order-store.test.mjs` runs the whole suite against a
+fake v9 server that throws if a batch write ever arrives.
+
+Both numbers above are tested, not estimated: `docs/order-store.test.mjs` counts
+client requests (`[14]`–`[20]`) and `docs/main-api.test.mjs` counts spreadsheet
+round trips and lock acquisitions (`[18]`–`[22]`). A change that reintroduces
+per-item requests fails those tests rather than reaching the factory.
 
 **The lost-update race on orders is gone for edits to different orders.**
 `persistOrders()` and `submitOrder()` used to blast `state.orders` wholesale, so

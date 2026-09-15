@@ -23,6 +23,7 @@ class FakeRange {
     Object.assign(this, { sheet, row, col, numRows, numCols });
   }
   getValues() {
+    this.sheet.reads++;
     const out = [];
     for (let r = 0; r < this.numRows; r++) {
       const line = [];
@@ -32,6 +33,7 @@ class FakeRange {
     return out;
   }
   setValues(vals) {
+    this.sheet.writes++;
     if (vals.length !== this.numRows) throw new Error('setValues: จำนวนแถวไม่ตรงกับช่วง');
     vals.forEach((line, r) => {
       if (line.length !== this.numCols) throw new Error('setValues: จำนวนคอลัมน์ไม่ตรงกับช่วง');
@@ -39,8 +41,8 @@ class FakeRange {
     });
     return this;
   }
-  getValue() { return this.sheet._get(this.row, this.col); }
-  setValue(v) { this.sheet._set(this.row, this.col, v); return this; }
+  getValue() { this.sheet.reads++; return this.sheet._get(this.row, this.col); }
+  setValue(v) { this.sheet.writes++; this.sheet._set(this.row, this.col, v); return this; }
   clearContent() { return this.clearContents(); }
   clearContents() {
     for (let r = 0; r < this.numRows; r++)
@@ -62,6 +64,8 @@ class FakeRange {
 class FakeSheet {
   constructor(ss, name, index) {
     Object.assign(this, { ss, name, index, cells: new Map(), maxCols: 26, maxRows: 1000 });
+    // นับรอบที่คุยกับ Sheets จริงๆ — ตัวเลขนี้คือต้นทุนที่ทำให้ช้า ไม่ใช่ขนาดข้อมูล
+    this.reads = 0; this.writes = 0;
     this.validations = [];
     this.formatRules = [];
   }
@@ -77,6 +81,7 @@ class FakeSheet {
   getMaxColumns() { return this.maxCols; }
   getMaxRows() { return this.maxRows; }
   insertColumnsAfter(after, count) { this.maxCols = Math.max(this.maxCols, after + count); }
+  insertRowsAfter(after, count) { this.maxRows = Math.max(this.maxRows, after + count); }
   getLastRow() {
     let last = 0;
     for (const [k, v] of this.cells) {
@@ -140,9 +145,11 @@ class FakeSpreadsheet {
 
 function makeEnv(spreadsheetId, webAppUrl) {
   const ss = new FakeSpreadsheet(spreadsheetId, 'ฐานข้อมูลระบบแจ้งซ่อม');
+  const stats = { locks: 0 };
   const chain = () => { const b = {}; ['requireValueInList','setAllowInvalid','whenTextEqualTo','setBackground','setFontColor','setRanges'].forEach(m => { b[m] = () => b; }); b.build = () => ({}); return b; };
   return {
     ss,
+    stats,
     SpreadsheetApp: {
       openById: (id) => { if (id !== spreadsheetId) throw new Error('เปิดชีตผิดไฟล์: ' + id); return ss; },
       getActiveSpreadsheet: () => ss,
@@ -150,7 +157,7 @@ function makeEnv(spreadsheetId, webAppUrl) {
       newConditionalFormatRule: chain,
     },
     ScriptApp: { getService: () => ({ getUrl: () => webAppUrl }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() { stats.locks++; }, releaseLock() {} }) },
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput: (t) => ({ _t: t, setMimeType() { return this; }, getContent() { return this._t; } }),
@@ -176,7 +183,8 @@ function loadApi(env) {
     SRC + `
     return { doGet, doPost, resyncAll, onEditDocForm_, renderPhotosPage_, findOrderById_,
              syncOrdersSheet_, syncOneOrderRow_, loadOrderPhotos_, setKvValue_, getKvValue_,
-             CODE_VERSION, ORDERS_HEADERS, ORDERS_ID_COLUMN, isOrderKey_ };`
+             CODE_VERSION, ORDERS_HEADERS, ORDERS_ID_COLUMN, isOrderKey_,
+             buildBundle_, getKvValues_, setKvValues_, BUNDLE_VERSION };`
   );
   return factory(env.SpreadsheetApp, env.ScriptApp, env.LockService, env.ContentService,
                  env.HtmlService, env.Utilities, console);
@@ -210,6 +218,16 @@ function mkOrder(n, over) {
 function post(api, key, value) {
   return JSON.parse(api.doPost({ postData: { contents: JSON.stringify({ key, value: JSON.stringify(value) }) } }).getContent());
 }
+// v10: เขียนหลายคีย์ในคำขอเดียว — pairs = [[key, value], ...]
+function postBatch(api, pairs) {
+  const batch = pairs.map(([key, value]) => ({ key, value: JSON.stringify(value) }));
+  return JSON.parse(api.doPost({ postData: { contents: JSON.stringify({ batch }) } }).getContent());
+}
+// v10: คำขอรวมฝั่งอ่าน — คืนอ็อบเจกต์ที่ parse ค่าดิบให้แล้วเหมือนที่ฝั่งแอปทำ
+function bundle(api, params) {
+  return JSON.parse(api.doGet({ parameter: Object.assign({ key: 'bundle' }, params) }).getContent());
+}
+const bval = (raw) => (raw === null || raw === undefined ? null : JSON.parse(raw));
 function ordersRows(env) {
   const sh = env.ss.getSheetByName(ORDERS_TAB);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -414,7 +432,7 @@ console.log('\n[14] endpoint ตรวจสุขภาพยังทำงา
 {
   const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
   const v = JSON.parse(api.doGet({ parameter: { key: 'version' } }).getContent());
-  ok('เวอร์ชันเป็น v9', v.value === api.CODE_VERSION && /^v9-/.test(v.value), v.value);
+  ok('เวอร์ชันเป็น v10', v.value === api.CODE_VERSION && /^v10-/.test(v.value), v.value);
   const who = JSON.parse(JSON.parse(api.doGet({ parameter: { key: 'whoami' } }).getContent()).value);
   ok('whoami บอก id ของชีตที่ใช้จริง', who.spreadsheetId === SHEET_ID, who.spreadsheetId);
 }
@@ -459,6 +477,146 @@ console.log('\n[17] การเพิ่มใบต้องไม่ไปล
   ok('ทุกช่วงที่ลงดรอปดาวน์เป็นแถวเดียว', oversized.length === 0, oversized.slice(0, 3).join(', '));
   // ตรวจว่าแถวสุดท้ายยังได้ดรอปดาวน์จริง (ไม่ใช่ประหยัดจนลืมลง)
   ok('แถวที่ 31 (ใบสุดท้าย) ได้ดรอปดาวน์สถานะ', sh.validations.includes('R31C9:1x1'), sh.validations.slice(-6).join(', '));
+}
+
+
+/* ===================== v10: คำขอรวม + เขียนเป็นชุด =====================
+   เหตุผลที่ต้องมีชุดนี้: ปัญหา "โหลดช้า/ส่งช้า" ของระบบนี้ไม่เคยเป็นเรื่องขนาดข้อมูล แต่เป็น
+   "จำนวนคำขอ" ที่ต้องเข้าคิว execution ของ Apps Script และ "จำนวนครั้งที่จับ LockService"
+   สองอย่างนี้เป็นตัวเลขที่ทดสอบได้ จึงต้องมีตัวจับไว้ ไม่ใช่รู้อีกทีตอนโรงงานบ่น */
+
+function seedMasterTabs(env) {
+  const dept = env.ss.insertSheet('แผนก');
+  dept.appendRow(['รหัส', 'ชื่อแผนก']);
+  dept.appendRow(['ST', 'คลังสินค้า']);
+  dept.appendRow(['PR', 'ผลิต']);
+  const mc = env.ss.insertSheet('เครื่องจักร');
+  mc.appendRow(['รหัส', 'ชื่อเครื่องจักร', 'แผนก']);
+  mc.appendRow(['WH-FORK-001', 'รถโฟล์คลิฟท์ไฟฟ้า', 'ST']);
+  const tech = env.ss.insertSheet('ช่าง');
+  tech.appendRow(['ชื่อช่าง']);
+  tech.appendRow(['เรืองฤทธิ์ พัดเจริญ']);
+  const perm = env.ss.insertSheet('สิทธิ์ผู้ใช้ LINE');
+  perm.appendRow(['userId', 'บทบาท', 'ชื่อ']);
+  perm.appendRow(['D-abc123', 'tech', 'เรืองฤทธิ์ พัดเจริญ']);
+  perm.appendRow(['D-abc123', 'maint', '']);
+}
+
+console.log('\n[18] คำขอรวม: เปิดแอปหนึ่งครั้งต้องได้ทุกอย่างในคำขอเดียว');
+{
+  const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
+  seedMasterTabs(env);
+  const orders = Array.from({ length: 30 }, (_, i) => mkOrder(i + 1, { id: 'id-' + (i + 1), docNumber: 'ST-' + (i + 1) + '/26' }));
+  postBatch(api, orders.map(o => ['order:' + o.id, o])
+    .concat([[ 'orderIndex', orders.map(o => ({ i: o.id, r: 'r1' })) ],
+             [ 'counters', { ST: { 26: 30 } } ],
+             [ 'notifications', [{ id: 'n1', message: 'มีใบใหม่' }] ],
+             [ 'accessRequests', [{ id: 'q1', status: 'pending', name: 'พรทวี' }] ]]));
+
+  const b = bundle(api, { keys: 'config,userRoles,counters,notifications,accessRequests', userId: 'D-abc123', orders: '*' });
+  ok('ตอบด้วยรูปแบบ bundle (ฝั่งแอปใช้ฟิลด์นี้ตรวจว่าเซิร์ฟเวอร์อัปเดตแล้ว)', b.bundle === api.BUNDLE_VERSION, b.bundle);
+  const cfg = bval(b.kv.config);
+  ok('config มาจากแท็บจริงทั้งสามแท็บ',
+     cfg.departments.length === 2 && cfg.machines[0].code === 'WH-FORK-001' && cfg.technicians[0] === 'เรืองฤทธิ์ พัดเจริญ',
+     JSON.stringify(cfg).slice(0, 120));
+  const roles = bval(b.kv.userRoles);
+  ok('สิทธิ์ของรหัสประจำเครื่องถูกค้นให้ในคำขอเดียวกัน',
+     roles.roles.join(',') === 'tech,maint' && roles.techNames[0] === 'เรืองฤทธิ์ พัดเจริญ', JSON.stringify(roles));
+  ok('counters มาครบ', bval(b.kv.counters).ST['26'] === 30);
+  ok('notifications มาครบ', bval(b.kv.notifications)[0].id === 'n1');
+  ok('accessRequests มาครบ', bval(b.kv.accessRequests)[0].id === 'q1');
+  ok('ดัชนีมา 30 ใบ', bval(b.orderIndex).length === 30, bval(b.orderIndex).length);
+  const got = Object.keys(b.orders);
+  ok('ตัวใบมาครบ 30 ใบในคำขอเดียว', got.length === 30, got.length);
+  ok('เนื้อใบถูกต้องทุกใบ', orders.every(o => bval(b.orders[o.id]).docNumber === o.docNumber));
+  ok('ไม่มีธง more (ยังไม่ถึงเพดานต่อคำขอ)', b.more === undefined, b.more);
+}
+
+console.log('\n[19] ต้นทุนของคำขอรวมต้องไม่โตตามจำนวนใบ (นี่คือหัวใจของการแก้ความช้า)');
+{
+  const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
+  const orders = Array.from({ length: 30 }, (_, i) => mkOrder(i + 1, { id: 'id-' + (i + 1) }));
+  postBatch(api, orders.map(o => ['order:' + o.id, o])
+    .concat([['orderIndex', orders.map(o => ({ i: o.id, r: 'r1' }))]]));
+  const kv = env.ss.getSheetByName('KV');
+
+  kv.reads = 0;
+  bundle(api, { keys: 'counters,notifications', orders: '*' });
+  const batched = kv.reads;
+  // แถวของใบถูกต่อท้ายติดกัน จึงอ่านรวดเดียวได้ — ตัวเลขนี้ต้องคงที่ ไม่ผูกกับจำนวนใบ
+  ok('อ่านชีตไม่กี่รอบ ไม่ใช่รอบละใบ (' + batched + ' รอบ ต่อ 30 ใบ)', batched <= 8, batched);
+
+  kv.reads = 0;
+  orders.forEach(o => api.doGet({ parameter: { key: 'order:' + o.id } }));
+  const oneByOne = kv.reads;
+  ok('แบบเดิม (ยิงทีละใบ) แพงกว่ากันหลายเท่า (' + oneByOne + ' รอบ)', oneByOne >= batched * 4, oneByOne);
+}
+
+console.log('\n[20] เขียนเป็นชุด: จับล็อกครั้งเดียว และแท็บสำเนาต้องอัปเดตครบทุกใบ');
+{
+  const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
+  const a = mkOrder(1, { id: 'id-a', docNumber: 'ST-001/26' });
+  const b = mkOrder(2, { id: 'id-b', docNumber: 'ST-002/26' });
+  const res = postBatch(api, [
+    ['order:id-a', a], ['order:id-b', b],
+    ['orderIndex', [{ i: 'id-a', r: 'r1' }, { i: 'id-b', r: 'r1' }]],
+    ['counters', { ST: { 26: 2 } }],
+    ['photos:id-a:0', 'data:image/jpeg;base64,AAAA'],
+  ]);
+  ok('doPost ตอบ ok', res.ok === true, JSON.stringify(res));
+  ok('จับ LockService ครั้งเดียวสำหรับทั้งชุด (เดิม 5 ครั้ง)', env.stats.locks === 1, env.stats.locks);
+  const rows = ordersRows(env);
+  ok('แท็บใบแจ้งซ่อมได้ครบสองใบ', rows.length === 2, rows.length);
+  ok('เลขที่เอกสารถูกใบ', rows.map(r => r[0]).join(',') === 'ST-001/26,ST-002/26', rows.map(r => r[0]).join(','));
+  ok('ค่าอื่นๆ ลง KV ครบ', JSON.parse(api.getKvValue_('counters')).ST['26'] === 2 &&
+     JSON.parse(api.getKvValue_('photos:id-a:0')) === 'data:image/jpeg;base64,AAAA');
+  // ล้างข้อมูลทั้งระบบผ่านชุดเดียวก็ต้องทำงานเหมือนเดิม (ดัชนีว่าง = สัญญาณล้างแท็บ)
+  postBatch(api, [['orderIndex', []], ['order:id-a', null], ['order:id-b', null]]);
+  ok('ดัชนีว่างในชุด ล้างแท็บใบแจ้งซ่อมให้เหมือนเดิม', ordersRows(env).length === 0, ordersRows(env).length);
+}
+
+console.log('\n[21] เขียนเป็นชุด: คีย์ใหม่ต่อท้ายถูกแถว คีย์ซ้ำในชุดเดียวต้องไม่งอกสองแถว');
+{
+  const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
+  post(api, 'counters', { ST: { 26: 1 } });                  // คีย์ที่มีอยู่แล้ว
+  postBatch(api, [
+    ['counters', { ST: { 26: 2 } }],                          // ทับของเดิม
+    ['notifications', [{ id: 'n1' }]],                        // คีย์ใหม่
+    ['accessRequests', [{ id: 'q1' }]],                       // คีย์ใหม่
+    ['notifications', [{ id: 'n1' }, { id: 'n2' }]],          // คีย์เดิมซ้ำในชุดเดียวกัน
+  ]);
+  const kv = env.ss.getSheetByName('KV');
+  const keyCol = kv.getRange(2, 1, kv.getLastRow() - 1, 1).getValues().map(r => r[0]);
+  ok('มีคีย์ละแถวเดียว ไม่ซ้ำ', new Set(keyCol).size === keyCol.length, keyCol.join(' | '));
+  ok('ค่าที่มาทีหลังในชุดเดียวกันชนะ', JSON.parse(api.getKvValue_('notifications')).length === 2);
+  ok('คีย์ที่มีอยู่แล้วถูกเขียนทับ ไม่ใช่ต่อท้ายใหม่', JSON.parse(api.getKvValue_('counters')).ST['26'] === 2);
+  ok('คีย์ใหม่อ่านกลับได้ครบ', JSON.parse(api.getKvValue_('accessRequests'))[0].id === 'q1');
+}
+
+console.log('\n[22] คำขอรวม: ขอเฉพาะใบที่เปลี่ยน และคีย์ที่ไม่มีต้องเป็น null ไม่ใช่หายไปเฉยๆ');
+{
+  const env = makeEnv(SHEET_ID, APP_URL); const api = loadApi(env);
+  const orders = Array.from({ length: 5 }, (_, i) => mkOrder(i + 1, { id: 'id-' + (i + 1) }));
+  postBatch(api, orders.map(o => ['order:' + o.id, o])
+    .concat([['orderIndex', orders.map(o => ({ i: o.id, r: 'r1' }))]]));
+
+  const only = bundle(api, { orders: 'id-2,id-4' });
+  ok('ได้เฉพาะสองใบที่ขอ', Object.keys(only.orders).join(',') === 'id-2,id-4', Object.keys(only.orders).join(','));
+  ok('ดัชนีแนบมาให้ด้วยเสมอเมื่อขอใบ', bval(only.orderIndex).length === 5);
+
+  const miss = bundle(api, { keys: 'counters,ไม่มีคีย์นี้', orders: 'id-9' });
+  ok('คีย์ที่ไม่มีค่าเป็น null (คนละความหมายกับดึงไม่สำเร็จ)',
+     miss.kv.counters === null && miss.kv['ไม่มีคีย์นี้'] === null, JSON.stringify(miss.kv));
+  ok('ใบที่ไม่มีช่องเป็น null เช่นกัน', miss.orders['id-9'] === null, JSON.stringify(miss.orders));
+
+  const plain = bundle(api, { keys: 'counters' });
+  ok('ไม่ได้ขอใบ ก็ไม่ต้องแตะดัชนี/ตัวใบเลย', plain.orders === undefined && plain.orderIndex === undefined);
+
+  // endpoint เดิมทุกตัวต้องยังตอบเหมือนเดิม — แท็บที่เปิดค้างอยู่ยังรันโค้ดเก่าที่ยิงทีละคีย์
+  const one = JSON.parse(api.doGet({ parameter: { key: 'orderIndex' } }).getContent());
+  ok('doGet ทีละคีย์แบบเดิมยังใช้ได้', JSON.parse(one.value).length === 5);
+  const cfg = JSON.parse(api.doGet({ parameter: { key: 'config' } }).getContent());
+  ok('doGet config แบบเดิมยังใช้ได้', JSON.parse(cfg.value).departments.length === 0);
 }
 
 console.log(`\n=== ผ่าน ${pass} / ล้มเหลว ${fail} ===`);

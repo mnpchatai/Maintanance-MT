@@ -585,7 +585,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-14.1';
+const APP_VERSION = '2026-09-15.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -920,11 +920,27 @@ function applyMyNameToForm(){
   if(state.myName && !state.form.requestedBy) state.form.requestedBy = state.myName;
 }
 /* รวมบทบาทจากชีต + จากคำขอที่อนุมัติแล้ว แล้วตัดสินว่าเข้าใช้งานได้หรือยัง */
+/* ดึงสองอย่างที่ใช้ตัดสินสิทธิ์: แถวในชีต "สิทธิ์ผู้ใช้ LINE" กับรายการคำขอสิทธิ์
+   ตอนเปิดแอปทั้งคู่มากับคำขอรวมแล้ว (ดู startBoot) หลังจากนั้นยังต้องเป็นของสดทุกครั้ง แต่ก็ยัง
+   รวบเป็นคำขอเดียวได้ — สำคัญกับหน้า "รอผู้ดูแลอนุมัติ" ซึ่งเช็คซ้ำทุก 7 วินาที เดิมเสียรอบละ 2 คำขอ
+   คืนค่าความหมายเดียวกับของเดิมเป๊ะ: sheet === null = เช็คไม่สำเร็จ, requests === undefined = ดึงไม่สำเร็จ
+   (resolveAccess ใช้สองค่านี้แยก "ไม่มีสิทธิ์จริง" ออกจาก "เช็คไม่สำเร็จ" ห้ามทำให้กำกวม) */
+async function fetchAccess(){
+  await bootReady();
+  if(bundleHas(bootKv, 'userRoles') || bundleHas(bootKv, 'accessRequests')){
+    return await Promise.all([getUserRolesBoot(state.deviceId), storeGetBoot('accessRequests')]);
+  }
+  const b = await bundleGet({ keys: ['userRoles','accessRequests'], userId: state.deviceId });
+  // ยิงคำขอรวมแล้วล้มเหลว = ถือว่าเช็คไม่สำเร็จไปเลย อย่ายิงซ้ำทีละคีย์ให้คิวยาวขึ้นอีก
+  if(b === undefined) return [null, undefined];
+  if(b){
+    const roles = bundleVal(b.kv.userRoles);
+    return [roles === undefined ? null : (roles || { roles:[], techNames:[] }), bundleVal(b.kv.accessRequests)];
+  }
+  return await Promise.all([getUserRoles(state.deviceId), storeGet('accessRequests')]);
+}
 async function resolveAccess(){
-  const [sheet, requests] = await Promise.all([
-    getUserRoles(state.deviceId),
-    storeGet('accessRequests'),
-  ]);
+  const [sheet, requests] = await fetchAccess();
   // เก็บผลดิบไว้โชว์ในหน้า "ขอสิทธิ์เข้าใช้งาน" เพื่อให้แยกออกว่าติดที่ชั้นไหน: ติดต่อเซิร์ฟเวอร์ไม่ได้
   // (serverOk=false) หรือ ติดต่อได้แต่ไม่พบรหัสนี้ในชีต (serverOk=true แต่ roles ว่าง)
   state.lastCheck = { at: Date.now(), serverOk: sheet !== null, roles: (sheet && sheet.roles) || [] };
@@ -1292,6 +1308,212 @@ async function storeSet(key, val){
   }catch(e){ lastStoreSetError = 'network'; console.error('storage set failed', key, e); return false; }
 }
 
+/* ===== ลดจำนวนคำขอ: อ่านรวม (bundle) และเขียนเป็นชุด (batch) =====
+   ทุก storeGet/storeSet หนึ่งครั้ง = หนึ่ง execution ของ Apps Script และ Web App ที่ deploy แบบ
+   Execute as: Me รันคำขอของ "ทุกคน" ภายใต้โควตา concurrency ของเจ้าของสคริปต์คนเดียว
+   ตัวเลขที่ทำให้ช้าจึงคือ "จำนวนคำขอ" ไม่ใช่ขนาดข้อมูล
+
+   ตั้งแต่ย้ายมาเก็บใบละช่อง (14 ก.ย. 2569) การเปิดแอปหนึ่งครั้งกิน 8 + จำนวนใบ คำขอ
+   (สิทธิ์ 2 + config 1 + counters/notifications 2 + ผู้รับแจ้งเตือน 2 + ดัชนี 1 + ใบละ 1)
+   30 ใบ = 38 คำขอต่อการเปิดหนึ่งครั้ง ส่วนการกดส่งหนึ่งครั้งกิน 7 + จำนวนรูป คำขอ ซึ่งฝั่งเขียน
+   ทุกตัวต้องเข้าคิว LockService ตัวเดียวกันของทั้งระบบทีละตัว — คืออาการ "โหลดช้า/ส่งช้าอีกแล้ว"
+   ที่กลับมาหลังการแก้เพดานช่อง ไม่ใช่ปัญหาเดิมซ้ำ แต่เป็นราคาที่ยังไม่ได้จ่ายของการแก้ครั้งนั้น
+
+   ทางแก้สองด้าน (ต้องใช้ docs/main-api.gs v10 ขึ้นไป):
+     อ่าน  — bundleGet()      ขอหลายคีย์ + ใบแจ้งซ่อมทั้งหมดในคำขอเดียว
+     เขียน — storeSetPhases() เขียนหลายคีย์ในคำขอเดียว จับ LockService รอบเดียว
+
+   สำคัญ: ไฟล์ Apps Script ต้องเอาไปวางในตัวแก้ไขด้วยมือ ระหว่างที่ยังไม่วาง เซิร์ฟเวอร์จะไม่รู้จัก
+   key=bundle แล้วตอบ {"value":null} ซึ่งไม่มีฟิลด์ bundle — โค้ดนี้ใช้จุดนั้นตรวจเองแล้วถอยไป
+   วิธีเดิม (ยิงทีละคีย์) ตลอดทั้ง session แอปจึงใช้งานได้ปกติทั้งก่อนและหลังวาง ไม่มีช่วงพัง */
+let serverBundle = null;   // null = ยังไม่รู้, true = เซิร์ฟเวอร์รองรับแล้ว, false = รุ่นเก่า อย่าถามซ้ำ
+async function bundleGet(opts){
+  if(serverBundle === false) return null;
+  const o = opts || {};
+  let url = API_URL + '?key=bundle';
+  if(o.keys && o.keys.length) url += '&keys=' + encodeURIComponent(o.keys.join(','));
+  if(o.userId) url += '&userId=' + encodeURIComponent(o.userId);
+  if(o.orders) url += '&orders=' + encodeURIComponent(o.orders);
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if(!data || typeof data.bundle !== 'number'){
+      serverBundle = false;
+      console.warn('เซิร์ฟเวอร์ยังไม่รองรับคำขอรวม — ยังไม่ได้วาง docs/main-api.gs (v10) ในตัวแก้ไข Apps Script?');
+      return null;
+    }
+    serverBundle = true;
+    return data;
+  }catch(e){ console.error('bundle get failed', e); return undefined; }
+}
+/* แปลงค่าดิบจากคำขอรวมให้มีความหมายเท่ากับ storeGet เป๊ะ — null = ไม่มีค่านั้นจริงๆ,
+   undefined = อ่านไม่สำเร็จ (ห้ามให้ผู้เรียกปลดล็อกการเขียนกลับ ดูบทเรียนใน loadBackground) */
+function bundleVal(raw){
+  if(raw === null || raw === undefined) return null;
+  try{ return JSON.parse(raw); }catch(e){ console.error('bundle value parse failed', e); return undefined; }
+}
+function bundleHas(obj, key){ return !!obj && Object.prototype.hasOwnProperty.call(obj, key); }
+
+/* ---- คำขอรวมตอนเปิดแอป: ทุกอย่างที่หน้าจอแรกต้องใช้ มาในคำขอเดียว ---- */
+const BOOT_KEYS = ['userRoles','config','counters','notifications','accessRequests','lineUserRoles','lineRecipients'];
+let bootPromise = null;
+let bootKv = null;           // ค่าที่มากับคำขอรวม — ใช้แทนคำขอเดี่ยวได้ "ครั้งเดียว" ต่อคีย์ แล้วทิ้ง
+let bootOrderParts = null;   // { idx, parts } ของใบแจ้งซ่อม จากคำขอรวมรอบเดียวกัน
+/* withOrders = false สำหรับเครื่องที่ยังไม่เคยเข้าใช้งานได้ (ไม่มีสำเนาในเครื่อง) — คนกลุ่มนี้จะไปจบ
+   ที่หน้า "ขอสิทธิ์เข้าใช้งาน" ซึ่งไม่ได้ใช้ใบแจ้งซ่อมเลย ไม่มีเหตุผลให้ลากใบทั้งระบบมาให้
+   ถ้ามีสิทธิ์จริง loadBackground() จะไปขอใบเองในคำขอถัดไป (เสีย 2 คำขอเฉพาะการเปิดครั้งแรกสุด) */
+function startBoot(deviceId, withOrders){
+  bootPromise = (async () => {
+    const b = await bundleGet({ keys: BOOT_KEYS, userId: deviceId, orders: withOrders ? '*' : '' });
+    if(!b) return;   // รุ่นเก่า/ดึงไม่สำเร็จ — ทุกจุดถอยไปยิงคำขอเดี่ยวเองตามเดิม
+    bootKv = {};
+    BOOT_KEYS.forEach(k => { if(bundleHas(b.kv, k)) bootKv[k] = bundleVal(b.kv[k]); });
+    bootOrderParts = bundleOrderParts(b);
+  })();
+  return bootPromise;
+}
+async function bootReady(){ if(bootPromise) await bootPromise; }
+/* ใช้ค่าที่มากับคำขอรวมถ้ายังไม่ถูกใช้ ไม่งั้นยิงคำขอเดี่ยวตามเดิม
+   ใช้ได้ครั้งเดียวต่อคีย์โดยตั้งใจ — รอบ poll ถัดไปต้องได้ของสดจากเซิร์ฟเวอร์เสมอ ไม่ใช่ค่าตอนเปิดแอป */
+async function storeGetBoot(key){
+  await bootReady();
+  if(bundleHas(bootKv, key)){ const v = bootKv[key]; delete bootKv[key]; return v; }
+  return await storeGet(key);
+}
+async function getUserRolesBoot(userId){
+  await bootReady();
+  if(bundleHas(bootKv, 'userRoles')){
+    const v = bootKv.userRoles; delete bootKv.userRoles;
+    // null = ค้นแล้วไม่พบสิทธิ์ (คนละเรื่องกับ undefined = อ่านไม่สำเร็จ ซึ่งต้องถอยไปยิงใหม่
+    // ไม่งั้นคนที่มีสิทธิ์อยู่แล้วจะโดนเด้งไปหน้าขอสิทธิ์เพราะค่าที่อ่านไม่สำเร็จหนเดียว)
+    if(v !== undefined) return v || { roles:[], techNames:[] };
+  }
+  return await getUserRoles(userId);
+}
+/* แยก "ดัชนี + ตัวใบ" ออกจากคำตอบของคำขอรวม — คืน null เมื่อคำตอบนั้นไม่ได้ขอส่วนของใบมา */
+function bundleOrderParts(b){
+  if(!b || b.orderIndex === undefined) return null;
+  const idx = bundleVal(b.orderIndex);
+  if(idx === undefined) return { idx: undefined, parts: [] };
+  if(idx === null || !Array.isArray(idx)) return { idx: null, parts: [] };
+  // ใบที่เซิร์ฟเวอร์ตัดออกเพราะเกินเพดานต่อคำขอ (ธง more) จะไม่มีคีย์ของมันในคำตอบ = undefined
+  // ผู้เรียกเห็น undefined แล้วไปขอเพิ่มเองในคำขอถัดไป (ดู loadOrdersFromStore) ไม่ใช่ข้อมูลหาย
+  const parts = idx.map(e => bundleHas(b.orders, e.i) ? bundleVal(b.orders[e.i]) : undefined);
+  return { idx, parts };
+}
+/* ดึง "ตัวใบ" ตามรายการ id ที่ขอ — คำขอเดียวถ้าเซิร์ฟเวอร์รองรับ ไม่งั้นถอยไปยิงทีละใบแบบเดิม
+   คืนอาร์เรย์เรียงตาม ids ที่ส่งเข้ามา (undefined = ใบนั้นดึงไม่สำเร็จ) */
+const BUNDLE_IDS_PER_REQUEST = 60;   // id ใบละ ~36 ตัวอักษร — 60 ใบ ≈ 2,200 ตัวอักษร ยังห่างเพดานความยาว URL
+async function fetchOrderBodies(ids){
+  if(!ids.length) return [];
+  const got = new Map();
+  let left = ids.slice();
+  while(serverBundle !== false && left.length){
+    const chunk = left.slice(0, BUNDLE_IDS_PER_REQUEST);
+    const b = await bundleGet({ orders: chunk.join(',') });
+    /* undefined = ยิงแล้วล้มเหลว (เน็ต/เซิร์ฟเวอร์) — ห้ามถอยไปยิงต่อทีละใบ เพราะปลายทางเดียวกัน
+       ที่เพิ่งตอบไม่ไหว การยิงเพิ่มอีกหลายสิบคำขอมีแต่ทำให้คิวยาวขึ้น ถือว่ารอบนี้ดึงไม่สำเร็จไปเลย
+       (ผู้เรียกจะไม่ปลดล็อกการเขียน และรอบ poll ถัดไปจะลองใหม่ให้เอง) */
+    if(b === undefined) return ids.map(id => got.has(id) ? got.get(id) : undefined);
+    if(!b || !b.orders) break;          // null = เซิร์ฟเวอร์รุ่นเก่า — ตกไปทางเดิมข้างล่าง
+    let progressed = false;
+    for(const id of chunk){
+      if(!bundleHas(b.orders, id)) continue;
+      got.set(id, bundleVal(b.orders[id]));
+      progressed = true;
+    }
+    left = left.filter(id => !got.has(id));
+    if(!progressed) break;              // กันลูปไม่รู้จบถ้าคำขอรวมไม่คืบหน้าสักใบ
+  }
+  if(left.length){
+    const rest = await mapLimit(left, KV_PARALLEL, id => storeGet(orderKey(id)));
+    left.forEach((id, n) => got.set(id, rest[n]));
+  }
+  return ids.map(id => got.get(id));
+}
+
+/* ---- เขียนเป็นชุด ----
+   BATCH_MAX_KEYS/BATCH_MAX_CHARS กันคำขอเดียวใหญ่เกินจนกลายเป็นช้ากว่าเดิมบนมือถือ 4G
+   (รูปหนึ่งรูปหลังบีบอัดไม่เกิน 48,000 ตัวอักษร ชุดหนึ่งจึงพอดีราว 8 รูป) */
+const BATCH_MAX_KEYS = 25;
+const BATCH_MAX_CHARS = 400000;
+function canBatchWrite(){ return serverBundle === true; }
+/* เขียนหลายคีย์โดยรักษา "ลำดับที่จำเป็น" ไว้
+   phases = [[ [key,val], ... ], [ ... ]] — ทุกคีย์ในเฟสเดียวกันเขียนพร้อมกันได้ แต่เฟสหลัง
+   ต้องลงหลังเฟสก่อนเสมอ (เช่น ตัวใบต้องครบก่อนเขียนดัชนี — ดู saveOrdersDiff)
+   เซิร์ฟเวอร์รุ่นใหม่: ทุกเฟสรวมเป็นคำขอเดียว เพราะเขียนตามลำดับในอาร์เรย์อยู่แล้วภายใต้ล็อกเดียว
+   เซิร์ฟเวอร์รุ่นเก่า: ยิงทีละเฟส เฟสละ 6 คำขอขนาน — พฤติกรรมเท่าของเดิมเป๊ะ */
+async function storeSetPhases(phases){
+  const groups = phases.filter(p => p && p.length);
+  if(!groups.length) return true;
+  if(canBatchWrite()) return await storeSetBatch([].concat.apply([], groups));
+  for(const g of groups){
+    const oks = await mapLimit(g, KV_PARALLEL, p => storeSet(p[0], p[1]));
+    if(!oks.every(Boolean)) return false;
+  }
+  return true;
+}
+function storeSetMany(pairs){ return storeSetPhases([pairs]); }
+async function storeSetBatch(pairs){
+  lastStoreSetError = '';
+  const items = [];
+  for(const p of pairs){
+    const key = p[0], value = JSON.stringify(p[1]);
+    // ด่านเดียวกับ storeSet: ของที่ใหญ่เกินเพดานช่องต้องไม่ถูกส่งออกไปตั้งแต่ต้น
+    // (ทั้งชุดถือว่าล้มเหลว ไม่ใช่เขียนบางส่วน — ผู้เรียกทุกรายเช็คค่าที่คืนก่อนบอกผู้ใช้ว่าสำเร็จ)
+    if(!KV_UNCAPPED_KEYS.has(key) && value.length > KV_VALUE_MAX){
+      lastStoreSetError = 'too-large';
+      console.error('storage set rejected — value too large', key, value.length, '>', KV_VALUE_MAX);
+      return false;
+    }
+    items.push({ key, value });
+  }
+  const chunks = [];
+  let chunk = [], used = 0;
+  for(const it of items){
+    if(chunk.length && (chunk.length >= BATCH_MAX_KEYS || used + it.value.length > BATCH_MAX_CHARS)){
+      chunks.push(chunk); chunk = []; used = 0;
+    }
+    chunk.push(it); used += it.value.length;
+  }
+  if(chunk.length) chunks.push(chunk);
+  // ชุดย่อยถูกยิงเรียงกัน ลำดับของ pairs จึงยังคงอยู่แม้ถูกแบ่งหลายชุด
+  for(const c of chunks){ if(!await postBatch(c)) return false; }
+  return true;
+}
+/* ยิงคำขอเขียนเป็นชุดหนึ่งครั้ง — อ่านคำตอบด้วยกติกาเดียวกับ storeSet เป๊ะ (ดูเหตุผลยาวๆ ที่นั่น):
+   เจอ HTML = ล้มเหลวแน่ (หน้าล็อกอิน/หน้าข้อผิดพลาดของ Apps Script), เจอ JSON ที่บอกว่าไม่สำเร็จ
+   = ล้มเหลว, อ่านคำตอบไม่ได้เลยไม่นับว่าล้มเหลวเพราะของอาจลงชีตไปแล้วจริง */
+async function postBatch(items){
+  try{
+    const res = await fetch(API_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ batch: items })
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    let body = '';
+    try{ body = await res.text(); }catch(e){ return true; }
+    const head = body.slice(0, 400).toLowerCase();
+    if(head.includes('<!doctype') || head.includes('<html')){
+      lastStoreSetError = 'html';
+      console.error('batch set failed — got HTML instead of a result', body.slice(0, 200));
+      return false;
+    }
+    try{
+      const data = JSON.parse(body);
+      if(data && (data.ok === false || data.success === false || data.error)){
+        lastStoreSetError = 'server';
+        console.error('batch set failed — server reported an error', data);
+        return false;
+      }
+    }catch(e){ /* ไม่ใช่ JSON ก็ไม่ถือว่าผิด ตราบใดที่ไม่ใช่ HTML */ }
+    return true;
+  }catch(e){ lastStoreSetError = 'network'; console.error('batch set failed', e); return false; }
+}
+/* ===== จบส่วนลดจำนวนคำขอ ===== */
+
 /* ============================= ที่เก็บใบแจ้งซ่อม: หนึ่งใบ = หนึ่งช่อง =============================
    เดิมใบแจ้งซ่อม "ทุกใบในระบบ" ถูก stringify เป็นก้อนเดียวลงคีย์ 'orders' = ช่องเดียวของ Google Sheet
    ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 3,700 ตัวอักษร เพดานจริงจึงอยู่แค่ราว 12-20 ใบ
@@ -1351,12 +1573,7 @@ function resetOrderBookkeeping(){ savedOrderJson = new Map(); savedOrderRev = ne
 /* อ่านใบทั้งหมดจากที่เก็บใหม่
    คืน undefined = ดึงไม่สำเร็จ (ห้ามให้ผู้เรียกปลดล็อก ordersLoaded — ดูบทเรียนใน loadBackground)
    คืน null      = ยังไม่มีดัชนี แปลว่ายังไม่ย้ายระบบ ผู้เรียกต้องไปอ่านคีย์ 'orders' เดิมแล้วย้ายให้ */
-async function loadOrdersFromStore(){
-  const idx = await storeGet(ORDER_INDEX_KEY);
-  if(idx === undefined) return undefined;
-  if(idx === null) return null;
-  if(!Array.isArray(idx)) return null;
-  const parts = await mapLimit(idx, KV_PARALLEL, e => storeGet(orderKey(e.i)));
+function assembleOrders(idx, parts){
   // ดึงไม่สำเร็จแม้ใบเดียว = ถือว่าทั้งรอบไม่สำเร็จ ห้ามคืนรายการที่ขาดใบไปให้เขียนทับของจริงทีหลัง
   if(parts.some(p => p === undefined)) return undefined;
   resetOrderBookkeeping();
@@ -1370,14 +1587,48 @@ async function loadOrdersFromStore(){
   });
   return list;
 }
+/* ประกอบรายการจาก { idx, parts } ที่คำขอรวมส่งมา — เติมใบที่ถูกตัดเพราะเกินเพดานต่อคำขอให้ครบก่อน */
+async function ordersFromParts(pre){
+  if(pre.idx === undefined) return undefined;
+  if(pre.idx === null) return null;
+  let parts = pre.parts.slice();
+  const missing = [];
+  parts.forEach((o, n) => { if(o === undefined) missing.push(pre.idx[n].i); });
+  if(missing.length){
+    const more = await fetchOrderBodies(missing);
+    const byId = new Map(missing.map((id, n) => [id, more[n]]));
+    parts = parts.map((o, n) => o === undefined ? byId.get(pre.idx[n].i) : o);
+  }
+  return assembleOrders(pre.idx, parts);
+}
+async function loadOrdersFromStore(){
+  // ตอนเปิดแอป ดัชนีและตัวใบมาพร้อมกันในคำขอรวมรอบเดียวแล้ว (ดู startBoot) ไม่ต้องยิงซ้ำ
+  await bootReady();
+  let pre = bootOrderParts; bootOrderParts = null;
+  if(!pre){
+    /* ไม่ได้มากับคำขอเปิดแอป (เช่น เครื่องที่ยังไม่เคยมีสิทธิ์ เพิ่งได้รับอนุมัติ) — ขอดัชนีกับตัวใบ
+       มาพร้อมกันในคำขอเดียว ไม่ใช่ขอดัชนีก่อนแล้วค่อยขอตัวใบ ซึ่งเสียรอบเครือข่ายไปเปล่าๆ หนึ่งรอบ */
+    const b = await bundleGet({ orders: '*' });
+    if(b === undefined) return undefined;
+    if(b) pre = bundleOrderParts(b);
+  }
+  if(pre) return await ordersFromParts(pre);
+  // เซิร์ฟเวอร์รุ่นเก่า: ดัชนีก่อน แล้วค่อยไล่ขอตัวใบทีละใบเหมือนเดิม
+  const idx = await storeGet(ORDER_INDEX_KEY);
+  if(idx === undefined) return undefined;
+  if(idx === null) return null;
+  if(!Array.isArray(idx)) return null;
+  return assembleOrders(idx, await fetchOrderBodies(idx.map(e => e.i)));
+}
 /* รอบ poll: ดึงดัชนีคำขอเดียว แล้วดึงเฉพาะใบที่ rev ไม่ตรงกับที่ถืออยู่
    คืน undefined เมื่อดึงไม่สำเร็จ, null เมื่อยังไม่ย้ายระบบ, หรือ { list } เมื่อสำเร็จ */
-async function loadOrdersDelta(){
-  const idx = await storeGet(ORDER_INDEX_KEY);
+async function loadOrdersDelta(pre){
+  // pre = { idx } ที่มากับคำขอรวมของรอบ poll แล้ว (ดู pollForUpdates) — ไม่ต้องยิงขอดัชนีซ้ำ
+  const idx = pre ? pre.idx : await storeGet(ORDER_INDEX_KEY);
   if(idx === undefined) return undefined;
   if(idx === null || !Array.isArray(idx)) return null;
   const stale = idx.filter(e => savedOrderRev.get(e.i) !== e.r);
-  const fetched = await mapLimit(stale, KV_PARALLEL, e => storeGet(orderKey(e.i)));
+  const fetched = await fetchOrderBodies(stale.map(e => e.i));
   if(fetched.some(p => p === undefined)) return undefined;
   const byId = new Map();
   stale.forEach((e, n) => { if(fetched[n] && fetched[n].id) byId.set(e.i, { o: fetched[n], r: e.r }); });
@@ -1403,13 +1654,13 @@ async function loadOrdersDelta(){
    ล้มเหลวกลางคันได้โดยไม่เสียหาย: คีย์ 'orders' เดิมยังอยู่ครบ และรอบหน้าจะย้ายใหม่ทั้งชุด */
 async function migrateOrdersToPerKey(orders){
   if(!Array.isArray(orders)) return false;
-  const oks = await mapLimit(orders, KV_PARALLEL, o => storeSet(orderKey(o.id), o));
-  if(!oks.every(Boolean)){
-    console.error('ย้ายข้อมูลใบแจ้งซ่อมไม่สำเร็จ — เขียนตัวใบไม่ครบ', oks.filter(x => !x).length, 'ใบ');
+  const idx = orders.map(o => ({ i:o.id, r:newRev() }));
+  // สองเฟส: ตัวใบให้ครบก่อน แล้วดัชนีทีหลัง — storeSetPhases รักษาลำดับนี้ให้ทั้งสองแบบ
+  // (เซิร์ฟเวอร์ใหม่รวมเป็นคำขอเดียว, เซิร์ฟเวอร์เก่ายิงทีละเฟสแบบขนาน 6 เหมือนเดิมเป๊ะ)
+  if(!await storeSetPhases([orders.map(o => [orderKey(o.id), o]), [[ORDER_INDEX_KEY, idx]]])){
+    console.error('ย้ายข้อมูลใบแจ้งซ่อมไม่สำเร็จ');
     return false;
   }
-  const idx = orders.map(o => ({ i:o.id, r:newRev() }));
-  if(!await storeSet(ORDER_INDEX_KEY, idx)) return false;
   resetOrderBookkeeping();
   orders.forEach((o, n) => rememberOrder(o, idx[n].r));
   return true;
@@ -1429,19 +1680,20 @@ async function saveOrdersDiff(list){
   // ไม่มีอะไรเปลี่ยนเลยก็ไม่ต้องยิงคำขอให้เปลืองโควตา Apps Script
   if(!changed.length && !removed.length) return true;
   const revs = new Map();
-  if(changed.length){
-    const oks = await mapLimit(changed, KV_PARALLEL, o => {
-      const r = newRev(); revs.set(o.id, r);
-      return storeSet(orderKey(o.id), o);
-    });
-    if(!oks.every(Boolean)) return false;
-  }
+  changed.forEach(o => revs.set(o.id, newRev()));
   const idx = list.map(o => ({ i:o.id, r: revs.get(o.id) || savedOrderRev.get(o.id) || newRev() }));
-  if(!await storeSet(ORDER_INDEX_KEY, idx)) return false;
+  /* สองเฟสที่ห้ามสลับ: ตัวใบให้ครบก่อน แล้วดัชนีทีหลัง (ดัชนีคือสิ่งที่ทำให้ใบ "มองเห็นได้")
+     เซิร์ฟเวอร์รุ่นใหม่รวมทั้งสองเฟสเป็นคำขอเดียว จับล็อกรอบเดียว — คือเหตุผลที่กดส่ง/อนุมัติเร็วขึ้น */
+  if(!await storeSetPhases([
+    changed.map(o => [orderKey(o.id), o]),
+    [[ORDER_INDEX_KEY, idx]],
+  ])) return false;
   changed.forEach(o => rememberOrder(o, revs.get(o.id)));
   removed.forEach(forgetOrder);
-  // ล้างช่องของใบที่ถูกลบออกจากดัชนีแล้ว — ทำแบบไม่รอผล ถ้าพลาดก็เหลือแค่เศษที่ไม่มีใครอ่าน
-  removed.forEach(id => { storeSet(orderKey(id), null); });
+  /* ล้างช่องของใบที่ถูกลบออกจากดัชนีแล้ว — ยังเป็นแบบ "ไม่รอผล" เหมือนเดิมโดยตั้งใจ ถ้าพลาดก็เหลือ
+     แค่เศษที่ไม่มีใครอ่าน (ดัชนีคือแหล่งความจริง) เอาผลของมันมาตัดสินว่าการบันทึกล้มเหลวไม่ได้
+     เดี๋ยวผู้ใช้จะเห็น "บันทึกไม่สำเร็จ" ทั้งที่ของลงเรียบร้อยแล้ว — ต่างกันแค่ตอนนี้รวบเป็นคำขอเดียว */
+  if(removed.length) storeSetMany(removed.map(id => [orderKey(id), null]));
   return true;
 }
 /* ล้างใบแจ้งซ่อมทั้งหมด (ปุ่ม "ล้างข้อมูล" ของ admin)
@@ -1451,9 +1703,11 @@ async function saveOrdersDiff(list){
 async function clearOrdersStore(){
   const idx = await storeGet(ORDER_INDEX_KEY);
   if(idx === undefined) return false;
+  // ดัชนีว่างคือตัวตัดสิน (และเป็นสัญญาณให้ Apps Script ล้างแท็บด้วย) ต้องลงให้ได้ก่อน
   if(!await storeSet(ORDER_INDEX_KEY, [])) return false;
   resetOrderBookkeeping();
-  if(Array.isArray(idx)) idx.forEach(e => { storeSet(orderKey(e.i), null); });
+  // ล้างช่องที่เหลือแบบไม่รอผลเหมือนเดิม ต่างกันแค่รวบเป็นคำขอเดียวแทนที่จะเป็นใบละคำขอ
+  if(Array.isArray(idx) && idx.length) storeSetMany(idx.map(e => [orderKey(e.i), null]));
   return true;
 }
 
@@ -1468,7 +1722,7 @@ function ensureEssentialLoaded(){
   return essentialLoadPromise;
 }
 async function loadEssential(){
-  const cfg = await storeGet('config');
+  const cfg = await storeGetBoot('config');
   state.config = cfg || state.config;
   if(!state.config.lineWebhooks) state.config.lineWebhooks = {};
   // เหมือน loadBackground: undefined = ดึงไม่สำเร็จ, null = เซิร์ฟเวอร์บอกว่ายังไม่มี config จริงๆ
@@ -1523,8 +1777,8 @@ async function loadOrdersOnce(){
 }
 /* รอบ poll: ปกติเสียแค่คำขอเดียว (ดัชนี) แล้วดึงเฉพาะใบที่มีคนแก้จริง
    เบากว่าเดิมที่ลากใบทั้งระบบกลับมาใหม่ทุก 15-90 วินาทีไม่ว่าจะมีอะไรเปลี่ยนหรือไม่ */
-async function pollOrders(){
-  const delta = await loadOrdersDelta();
+async function pollOrders(pre){
+  const delta = await loadOrdersDelta(pre);
   if(delta === undefined) return undefined;
   if(delta === null) return await loadOrdersOnce();   // ยังไม่ย้ายระบบ — อ่านของเดิมแล้วย้ายให้ตรงนี้เลย
   return delta.list;
@@ -1533,7 +1787,7 @@ async function pollOrders(){
    (ปุ่มที่ต้องเขียนกลับ orders ทุกปุ่มเช็ค state.ordersLoaded ก่อนเสมอ ดู persistOrders()) */
 async function loadBackground(){
   const [counters, orders, notifs] = await Promise.all([
-    storeGet('counters'), loadOrdersOnce(), storeGet('notifications')
+    storeGetBoot('counters'), loadOrdersOnce(), storeGetBoot('notifications')
   ]);
   if(counters !== undefined) state.counters = counters || {};
   // storeGet คืน undefined เมื่อดึงไม่สำเร็จ (คนละความหมายกับ null ที่แปลว่า "ไม่มีคีย์นี้จริงๆ")
@@ -1557,7 +1811,7 @@ async function loadBackground(){
 async function loadNotifyRouting(){
   if(state.lineDataLoaded) return;
   const [lineUserRoles, lineRecipients] = await Promise.all([
-    storeGet('lineUserRoles'), storeGet('lineRecipients')
+    storeGetBoot('lineUserRoles'), storeGetBoot('lineRecipients')
   ]);
   if(state.lineDataLoaded) return;   // หน้าตั้งค่าโหลดชุดเต็มแซงไปแล้วระหว่างรอ อย่าเขียนทับของใหม่ด้วยของเก่า
   if(lineUserRoles && typeof lineUserRoles === 'object') state.lineUserRoles = lineUserRoles;
@@ -1587,9 +1841,11 @@ async function ensureLineDataLoaded(){
   if(state.lineDataLoaded) return;
   // sendLog = การส่งที่ไม่สำเร็จซึ่งเก็บไว้บนเซิร์ฟเวอร์จาก "ทุกเครื่อง" (ดู queueSendLogRow)
   // ผู้ดูแลระบบจึงตอบคำถาม "ทำไมคนนั้นไม่ได้รับแจ้งเตือนเมื่อวาน" ได้โดยไม่ต้องไปยืมเครื่องคนที่กดปุ่ม
-  const [lineUsers, lineUserRoles, lineRecipients, sendLog] = await Promise.all([
-    storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients'), storeGet('lineSendLog')
-  ]);
+  const keys = ['lineUsers','lineUserRoles','lineRecipients','lineSendLog'];
+  const b = await bundleGet({ keys });
+  const [lineUsers, lineUserRoles, lineRecipients, sendLog] = b
+    ? keys.map(k => bundleVal(b.kv[k]))
+    : await Promise.all(keys.map(k => storeGet(k)));
   state.lineUsers = Array.isArray(lineUsers) ? lineUsers : [];
   state.lineUserRoles = (lineUserRoles && typeof lineUserRoles === 'object') ? lineUserRoles : {};
   state.lineRecipients = Array.isArray(lineRecipients) ? lineRecipients : [];
@@ -2303,8 +2559,7 @@ function compressToLimit(src, sw, sh){
 function photoKey(id, i){ return 'photos:' + id + ':' + i; }
 async function savePhotosAt(id, photos, startIndex){
   if(!photos.length) return true;
-  const oks = await Promise.all(photos.map((p, n) => storeSet(photoKey(id, startIndex + n), p)));
-  return oks.every(Boolean);
+  return await storeSetMany(photos.map((p, n) => [photoKey(id, startIndex + n), p]));
 }
 /* คืนอาร์เรย์รูปของใบนี้ — undefined = ดึงไม่สำเร็จ (คนละความหมายกับ [] ที่แปลว่าไม่มีรูป)
    ผู้เรียกต้องแยกสองกรณีนี้ให้ออก ไม่งั้นเน็ตกระตุกหนเดียวจะกลายเป็นการเขียนทับรูปเดิมด้วยของว่าง */
@@ -2313,7 +2568,11 @@ async function loadOrderPhotos(o){
   if(!o.photosSplit) return await storeGet('photos:' + o.id);
   const n = o.photoCount || 0;
   if(!n) return [];
-  const parts = await Promise.all(Array.from({ length:n }, (_, i) => storeGet(photoKey(o.id, i))));
+  // รูปละคีย์ = รูปละคำขอ เปิดใบที่มี 5 รูปเคยกิน 5 execution ตอนนี้ขอรวมมาในคำขอเดียว
+  const keys = Array.from({ length:n }, (_, i) => photoKey(o.id, i));
+  const b = await bundleGet({ keys });
+  const parts = b ? keys.map(k => bundleVal(b.kv[k]))
+                  : await Promise.all(keys.map(k => storeGet(k)));
   if(parts.some(p => p === undefined)) return undefined;
   return parts.filter(p => typeof p === 'string' && p);
 }
@@ -4918,13 +5177,37 @@ async function pollForUpdates(){
   try{
     // lineUsers/lineUserRoles/lineRecipients ใช้แค่หน้าตั้งค่าของ admin — โหลด/poll แค่ตอนเคยเข้าหน้านั้น
     // แล้วเท่านั้น (state.lineDataLoaded) คนอื่นๆ ไม่ต้องยิง 3 คำขอนี้ทุก 3 วิให้เสียเวลาเปล่า
-    const lineDataPromise = state.lineDataLoaded
-      ? Promise.all([storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')])
-      : Promise.resolve([null, null, null]);
-    const [cfg, orders, notifs, reqs, [lineUsers, lineUserRoles, lineRecipients]] = await Promise.all([
-      storeGet('config'), pollOrders(), storeGet('notifications'), storeGet('accessRequests'),
-      lineDataPromise
-    ]);
+    const lineKeys = state.lineDataLoaded ? ['lineUsers','lineUserRoles','lineRecipients'] : [];
+    /* หนึ่งรอบ poll เคยเป็น 4 คำขอ (config / ดัชนีใบ / แจ้งเตือน / คำขอสิทธิ์) ต่อหนึ่งแท็บที่เปิดอยู่
+       คูณด้วยจำนวนเครื่องที่เปิดแอปค้างไว้ทั้งโรงงาน = คิว Apps Script ที่คนกำลังกดปุ่มต้องไปต่อท้าย
+       ตอนนี้เหลือคำขอเดียว และเสียคำขอที่สองเฉพาะรอบที่มีใบถูกแก้จริงเท่านั้น */
+    const keys = ['config', ORDER_INDEX_KEY, 'notifications', 'accessRequests'].concat(lineKeys);
+    const b = await bundleGet({ keys });
+    // undefined = ยิงคำขอรวมแล้วล้มเหลว (คนละกรณีกับ null ที่แปลว่าเซิร์ฟเวอร์ยังเป็นรุ่นเก่า)
+    // ข้ามรอบนี้ไปเฉยๆ อย่าไปยิงซ้ำทีละคีย์ให้คิวยาวขึ้นอีก รอบถัดไปลองใหม่เองอยู่แล้ว
+    if(b === undefined) return;
+    let cfg, orders, notifs, reqs, lineUsers = null, lineUserRoles = null, lineRecipients = null;
+    if(b){
+      cfg = bundleVal(b.kv.config);
+      notifs = bundleVal(b.kv.notifications);
+      reqs = bundleVal(b.kv.accessRequests);
+      if(lineKeys.length){
+        lineUsers = bundleVal(b.kv.lineUsers);
+        lineUserRoles = bundleVal(b.kv.lineUserRoles);
+        lineRecipients = bundleVal(b.kv.lineRecipients);
+      }
+      orders = await pollOrders({ idx: bundleVal(b.kv[ORDER_INDEX_KEY]) });
+    }else{
+      const lineDataPromise = state.lineDataLoaded
+        ? Promise.all([storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')])
+        : Promise.resolve([null, null, null]);
+      let lineTriple;
+      [cfg, orders, notifs, reqs, lineTriple] = await Promise.all([
+        storeGet('config'), pollOrders(), storeGet('notifications'), storeGet('accessRequests'),
+        lineDataPromise
+      ]);
+      [lineUsers, lineUserRoles, lineRecipients] = lineTriple;
+    }
     let changed = false;
     if(lineUsers && JSON.stringify(lineUsers) !== JSON.stringify(state.lineUsers)){ state.lineUsers = lineUsers; changed = true; }
     if(lineUserRoles && JSON.stringify(lineUserRoles) !== JSON.stringify(state.lineUserRoles)){ state.lineUserRoles = lineUserRoles; changed = true; }
@@ -5093,8 +5376,13 @@ async function startApp(){
   // และโหลดของสดทับเบื้องหลัง ผู้ใช้จึงไม่ต้องนั่งดู "กำลังตรวจสอบสิทธิ์ผู้ใช้งาน…" ระหว่างรอคิว Apps Script
   if(HANDOFF_DID) adoptHandoffDeviceId(HANDOFF_DID);   // ต้องมาก่อน getDeviceId() ไม่งั้นได้รหัสใหม่ไปแล้ว
   state.deviceId = getDeviceId();
+  const snapshot = readSnapshot();
+  /* ยิงคำขอรวม "ทันที" ที่รู้รหัสประจำเครื่อง — ไม่ await ตรงนี้ ให้มันวิ่งคู่ไปกับการคำนวณ
+     ลายนิ้วมือและการวาดหน้าจอจากสำเนาในเครื่อง ทุกจุดที่ต้องใช้ข้อมูลจะไป await ที่ bootReady() เอง
+     คำขอเดียวนี้แทนของเดิม 8 + จำนวนใบ คำขอ ซึ่งคือเวลาที่ผู้ใช้นั่งรอตอนเปิดแอป */
+  startBoot(state.deviceId, !!(snapshot && snapshot.auth && (snapshot.auth.allowedRoles || []).length));
   state.didHash = await sha256Hex(state.deviceId);
-  const bootedFromCache = applySnapshot(readSnapshot());
+  const bootedFromCache = applySnapshot(snapshot);
   if(bootedFromCache){
     render();
     startApp();   // ไม่ await — ให้การเช็คสิทธิ์ของจริงข้างล่างเดินคู่ขนานไปเลย

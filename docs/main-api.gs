@@ -1,4 +1,4 @@
-const CODE_VERSION = 'v9-2026-09-14';
+const CODE_VERSION = 'v10-2026-09-15';
 
 /* v9: ฝั่งแอปเลิกเก็บใบแจ้งซ่อม "ทุกใบรวมกันในคีย์เดียว" แล้ว เพราะคีย์ 'orders' คือช่องเดียว
    ของ Google Sheet ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 3,700 ตัวอักษร เพดานจริง
@@ -187,6 +187,87 @@ function setKvValue_(key, value) {
   const row = findRow_(sheet, key);
   if (row === -1) sheet.appendRow([key, value]);
   else sheet.getRange(row, 2).setValue(value);
+}
+
+/* ---------- v10: อ่าน/เขียน "หลายคีย์" ในการรันครั้งเดียว ----------
+   ทุก storeGet/storeSet หนึ่งครั้ง = หนึ่ง execution ของ Apps Script และ Web App ที่ deploy แบบ
+   Execute as: Me รันคำขอของผู้ใช้ทุกคนภายใต้โควตา concurrency ของเจ้าของสคริปต์คนเดียว
+   ตัวเลขที่เป็นคอขวดจริงจึงคือ "จำนวนคำขอ" ไม่ใช่ขนาดข้อมูล
+
+   ตั้งแต่ย้ายมาเก็บใบละช่อง (v9) การเปิดแอปหนึ่งครั้งต้องยิง 8 + จำนวนใบ คำขอ (ดัชนีหนึ่ง แล้วใบละหนึ่ง)
+   30 ใบ = 38 execution ต่อการเปิดหนึ่งครั้ง และการกดส่งหนึ่งครั้งกิน 7 + จำนวนรูป execution
+   ซึ่งทุกตัวต้องรอ LockService ตัวเดียวกันทีละตัว = อาการ "โหลดช้า/ส่งช้า" ที่กลับมาอีกครั้ง
+
+   สองฟังก์ชันนี้คือฐานของทางแก้: อ่านคอลัมน์คีย์ (A) รอบเดียวแล้วหยิบเฉพาะช่องค่าที่ต้องใช้
+   แถวที่ติดกันจะถูกอ่านรวดเดียว (ปกติแถวของใบถูกต่อท้ายพร้อมกันตอนย้ายระบบ จึงติดกันเกือบทั้งหมด)
+   ห้ามกลับไปใช้ getDataRange().getValues() เด็ดขาด — มันลากค่าคอลัมน์ B ของทุกแถวรวมถึงรูป base64
+   ทั้งระบบเข้าหน่วยความจำ ซึ่งเคยเป็นต้นเหตุความช้ามาแล้วครั้งหนึ่ง (ดูหมายเหตุ v7 เหนือ findRow_) */
+function kvKeyRows_(sheet) {
+  const lastRow = sheet.getLastRow();
+  const rows = new Map();
+  if (lastRow < 2) return { rows: rows, lastRow: lastRow };
+  const keys = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i][0];
+    if (k === '' || k === null || k === undefined) continue;
+    // แถวแรกที่เจอชนะ — ต้องตรงกับ findRow_ เป๊ะ ไม่งั้นอ่านกับเขียนจะไปคนละแถวเมื่อมีคีย์ซ้ำค้างอยู่
+    if (!rows.has(k)) rows.set(k, i + 2);
+  }
+  return { rows: rows, lastRow: lastRow };
+}
+
+// คืน Map(คีย์ -> ค่าดิบ) ค่า null = ไม่มีคีย์นั้น (ความหมายเดียวกับ getKvValue_)
+function kvValuesWith_(sheet, rowOf, keys) {
+  const out = new Map();
+  if (!keys || !keys.length) return out;
+  const picks = [];
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (!k || out.has(k)) continue;
+    out.set(k, null);
+    const row = rowOf.get(k);
+    if (row) picks.push({ key: k, row: row });
+  }
+  picks.sort(function (a, b) { return a.row - b.row; });
+  let i = 0;
+  while (i < picks.length) {
+    let j = i;
+    while (j + 1 < picks.length && picks[j + 1].row === picks[j].row + 1) j++;
+    const vals = sheet.getRange(picks[i].row, 2, j - i + 1, 1).getValues();
+    for (let n = i; n <= j; n++) out.set(picks[n].key, vals[n - i][0]);
+    i = j + 1;
+  }
+  return out;
+}
+
+function getKvValues_(keys) {
+  const sheet = getKvSheet_();
+  return kvValuesWith_(sheet, kvKeyRows_(sheet).rows, keys);
+}
+
+/* เขียนหลายคีย์รวดเดียว — คีย์ที่มีอยู่แล้วเขียนทับช่องเดิม คีย์ใหม่ต่อท้ายเป็นบล็อกเดียว
+   pairs = [{ key, value }, ...] ค่าที่ส่งมาต้องเป็นสตริงพร้อมเขียนแล้ว (ฝั่งแอป JSON.stringify มาให้) */
+function setKvValues_(pairs) {
+  if (!pairs || !pairs.length) return;
+  const sheet = getKvSheet_();
+  const info = kvKeyRows_(sheet);
+  const appends = [];
+  const appendAt = new Map();   // คีย์เดิมที่มาซ้ำในชุดเดียวกันต้องลงแถวเดียว ไม่ใช่งอกสองแถว
+  for (let i = 0; i < pairs.length; i++) {
+    const key = pairs[i].key;
+    const value = pairs[i].value;
+    const row = info.rows.get(key);
+    if (row) { sheet.getRange(row, 2).setValue(value); continue; }
+    if (appendAt.has(key)) { appends[appendAt.get(key)][1] = value; continue; }
+    appendAt.set(key, appends.length);
+    appends.push([key, value]);
+  }
+  if (!appends.length) return;
+  const start = Math.max(info.lastRow, 1) + 1;
+  const need = start + appends.length - 1;
+  // ต่อท้ายทีเดียวด้วย setValues ต้องมีแถวรองรับก่อน (appendRow ขยายให้เอง แต่ setValues ไม่ขยาย)
+  if (sheet.getMaxRows() < need) sheet.insertRowsAfter(sheet.getMaxRows(), need - sheet.getMaxRows());
+  sheet.getRange(start, 1, appends.length, 2).setValues(appends);
 }
 
 function getOrCreateSheet_(name, headers) {
@@ -777,6 +858,101 @@ function renderPhotosPage_(orderId) {
 
 /* ---------- Web app entry points ---------- */
 
+/* ---------- v10: คำขอรวม (bundle) — ข้อมูลหลายชุดในการรันครั้งเดียว ----------
+   <URL>?key=bundle&keys=<คีย์คั่นด้วยจุลภาค>&userId=<รหัสประจำเครื่อง>&orders=*|<id,id,...>
+
+   ทำไมต้องมี: ฝั่งแอปต้องใช้ข้อมูลหลายชุดพร้อมกันเสมอ (สิทธิ์ + config + ใบแจ้งซ่อม + แจ้งเตือน +
+   คำขอสิทธิ์) เดิมยิงคนละคำขอ = คนละ execution และตั้งแต่เก็บใบละช่อง ยังต้องยิงเพิ่มใบละหนึ่งอีก
+   เปิดแอปครั้งเดียวจึงกิน 8 + จำนวนใบ execution ทั้งที่ข้อมูลทั้งหมดนั้นอ่านจากชีตเดียวกันรอบเดียวได้
+
+   คีย์พิเศษที่ไม่ได้อยู่ในแท็บ KV ตรงๆ ใส่ปนมาใน keys= ได้เลย ฝั่งนี้รู้จักเอง:
+     config          → ประกอบสดจากแท็บ แผนก/เครื่องจักร/ช่าง (+ lineWebhooks ใน KV)
+     userRoles       → ค้นจากแท็บสิทธิ์ผู้ใช้ LINE ด้วย userId ที่ส่งมา
+     lineRecipients  → อ่านจากแท็บ "แจ้งเตือน LINE - ผู้รับ"
+
+   รูปแบบคำตอบ — ทุกค่าเป็น "สตริงดิบที่ยังไม่ parse" เหมือนที่ storeGet ได้จาก doGet ปกติเป๊ะ
+   เพื่อไม่ให้ชั้นขนส่งไปแตะความหมายของข้อมูล (null = ไม่มีคีย์นั้นจริงๆ):
+     { bundle:10, kv:{ <key>:<raw|null> }, orderIndex:<raw|null>, orders:{ <id>:<raw|null> }, more:true? }
+
+   เวอร์ชันเก่า (v9 ลงไป) ไม่รู้จัก key=bundle จะตอบ {"value":null} ซึ่งไม่มีฟิลด์ bundle
+   ฝั่งแอปใช้จุดนี้ตรวจเองว่าเซิร์ฟเวอร์ยังไม่ได้อัปเดต แล้วถอยไปยิงทีละคีย์แบบเดิมทั้ง session
+   (สำคัญมาก: ไฟล์นี้ต้องเอาไปวางในตัวแก้ไข Apps Script ด้วยมือ ระหว่างที่ยังไม่วาง แอปต้องใช้งานได้ปกติ) */
+const BUNDLE_VERSION = 10;
+/* เพดานของคำขอรวมหนึ่งครั้ง — กันคำตอบก้อนเดียวใหญ่เกินจนช้ากว่าเดิมบนมือถือ 4G
+   เกินเพดานจะตอบ more:true แล้วฝั่งแอปขอส่วนที่เหลือต่อเป็นคำขอถัดไป (ไม่ใช่ข้อมูลหาย) */
+const BUNDLE_MAX_ORDERS = 200;
+const BUNDLE_MAX_CHARS = 2000000;
+
+function buildConfig_() {
+  return {
+    departments: readDepts_(),
+    machines: readMachines_(),
+    technicians: readTechs_(),
+    lineWebhooks: JSON.parse(getKvValue_('lineWebhooks') || '{}')
+  };
+}
+
+function buildBundle_(params) {
+  const p = params || {};
+  const out = { bundle: BUNDLE_VERSION, kv: {} };
+  const asked = String(p.keys || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  const ordersParam = String(p.orders == null ? '' : p.orders).trim();
+
+  const plain = [];
+  let wantConfig = false, wantRoles = false, wantRecipients = false;
+  for (let i = 0; i < asked.length; i++) {
+    const k = asked[i];
+    if (k === 'config') { wantConfig = true; continue; }
+    if (k === 'userRoles') { wantRoles = true; continue; }
+    if (k === 'lineRecipients') { wantRecipients = true; continue; }
+    plain.push(k);
+  }
+  // lineWebhooks ถูกใช้ประกอบ config อยู่แล้ว ส่วน orderIndex ต้องอ่านเมื่อขอใบมาด้วย
+  if (ordersParam) plain.push(ORDER_INDEX_KEY);
+
+  const sheet = getKvSheet_();
+  const rowOf = kvKeyRows_(sheet).rows;
+  const vals = kvValuesWith_(sheet, rowOf, plain);
+  asked.forEach(function (k) {
+    if (k === 'config' || k === 'userRoles' || k === 'lineRecipients') return;
+    const v = vals.get(k);
+    out.kv[k] = (v === undefined || v === null || v === '') ? null : v;
+  });
+
+  if (wantConfig) out.kv.config = JSON.stringify(buildConfig_());
+  if (wantRoles) out.kv.userRoles = JSON.stringify(readUserRoles_(String(p.userId || '').trim()));
+  if (wantRecipients) out.kv.lineRecipients = JSON.stringify(readLineRecipients_());
+
+  if (!ordersParam) return out;
+
+  const idxRaw = vals.get(ORDER_INDEX_KEY);
+  out.orderIndex = (idxRaw === undefined || idxRaw === '') ? null : idxRaw;
+  let ids = [];
+  if (ordersParam === '*') {
+    try {
+      const idx = out.orderIndex ? JSON.parse(out.orderIndex) : [];
+      if (Array.isArray(idx)) ids = idx.map(function (e) { return e && e.i; }).filter(Boolean);
+    } catch (e) { logSyncError_('buildBundle_:orderIndex', e); }
+  } else {
+    ids = ordersParam.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+  if (ids.length > BUNDLE_MAX_ORDERS) { ids = ids.slice(0, BUNDLE_MAX_ORDERS); out.more = true; }
+
+  const bodies = kvValuesWith_(sheet, rowOf, ids.map(function (id) { return ORDER_KEY_PREFIX + id; }));
+  out.orders = {};
+  let total = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const raw = bodies.get(ORDER_KEY_PREFIX + ids[i]);
+    // ต้องเช็ค null ด้วย ไม่ใช่แค่ undefined — String(null) ได้สตริง "null" ซึ่งฝั่งแอปจะ parse
+    // ออกมาเป็นค่า null ที่ "อ่านสำเร็จ" แทนที่จะเป็น "ไม่มีช่องนี้" คนละความหมายกันคนละเรื่อง
+    const text = (raw === undefined || raw === null || raw === '') ? null : String(raw);
+    if (total >= BUNDLE_MAX_CHARS) { out.more = true; break; }
+    out.orders[ids[i]] = text;
+    total += text ? text.length : 0;
+  }
+  return out;
+}
+
 function doGet(e) {
   const params = (e && e.parameter) ? e.parameter : {};
   const key = params.key || null;
@@ -808,13 +984,13 @@ function doGet(e) {
   }
 
   if (key === 'config') {
-    const config = {
-      departments: readDepts_(),
-      machines: readMachines_(),
-      technicians: readTechs_(),
-      lineWebhooks: JSON.parse(getKvValue_('lineWebhooks') || '{}')
-    };
-    return ContentService.createTextOutput(JSON.stringify({ value: JSON.stringify(config) }))
+    return ContentService.createTextOutput(JSON.stringify({ value: JSON.stringify(buildConfig_()) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // v10: คำขอรวม — ดู buildBundle_ (ของเดิมทุก endpoint ยังทำงานเหมือนเดิมทุกประการ)
+  if (key === 'bundle') {
+    return ContentService.createTextOutput(JSON.stringify(buildBundle_(params)))
       .setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -846,45 +1022,85 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+/* v10: "เขียนหนึ่งคีย์" ถูกแยกออกมาเป็นสองท่อนเพื่อให้เส้นทางคีย์เดียวกับเส้นทางชุดหลายคีย์
+   ใช้ตรรกะก้อนเดียวกันเป๊ะ ไม่มีวันดริฟต์ออกจากกัน (บทเรียนซ้ำของโปรเจกต์นี้คือของสองฝั่งที่
+   "ควรจะเหมือนกัน" แต่ไม่มีอะไรบังคับ สุดท้ายมันต่างกันเงียบๆ แล้วไปโผล่หน้างาน) */
+function writeConfigValue_(value) {
+  const config = JSON.parse(value);
+  writeConfigSheets_(config);
+  setKvValue_('lineWebhooks', JSON.stringify(config.lineWebhooks || {}));
+}
+
+function mirrorKvWrite_(key, value) {
+  try {
+    /* v9: แอปเขียนใบแจ้งซ่อมมาทีละใบแล้ว (order:<id>) จึงอัปเดตแค่แถวของใบนั้น
+       ส่วนคีย์ 'orders' เดิมยังรับไว้เผื่อมีอะไรเขียนมา แต่ฝั่งแอปไม่เขียนแล้ว */
+    if (isOrderKey_(key)) {
+      const one = value ? JSON.parse(value) : null;
+      // ค่า null = ช่องของใบที่ถูกลบออกจากดัชนีแล้ว ข้ามไป การล้างแถวจัดการที่ orderIndex
+      if (one && one.id) syncOneOrderRow_(one);
+    } else if (key === ORDER_INDEX_KEY) {
+      /* ดัชนีว่าง = ผู้ดูแลกดล้างข้อมูลทั้งระบบ (ฝั่งแอปเขียนดัชนีว่างก่อนเสมอ แล้วค่อยล้างช่องของแต่ละใบ)
+         เป็นจังหวะเดียวที่รู้ได้ว่า "ใบหายไปแล้ว" จึงล้างแท็บที่นี่
+         ดัชนีที่ไม่ว่างไม่ต้องทำอะไร เพราะแต่ละใบซิงก์ผ่านคีย์ order:<id> ของตัวเองอยู่แล้ว */
+      const idx = value ? JSON.parse(value) : null;
+      if (Array.isArray(idx) && idx.length === 0) syncOrdersSheet_([]);
+    } else if (key === 'orders') {
+      syncOrdersSheet_(JSON.parse(value));
+    } else if (key === 'notifications') {
+      syncNotificationsSheet_(JSON.parse(value));
+    }
+  } catch (syncErr) {
+    // mirror sync failing shouldn't break saving — but log it so it's not a silent, undebuggable drift
+    logSyncError_('doPost:' + key, syncErr);
+  }
+}
+
 function doPost(e) {
   if (!e || !e.postData) {
     return ContentService.createTextOutput(JSON.stringify({ error: 'no request data' }))
       .setMimeType(ContentService.MimeType.JSON);
   }
   const body = JSON.parse(e.postData.contents);
+
+  /* v10: ชุดคำสั่งเขียนหลายคีย์ในการรันครั้งเดียว — { batch:[{key,value}, ...] }
+     เหตุผลเดียวกับคำขอรวมฝั่งอ่าน แต่ฝั่งเขียนสำคัญกว่าอีก เพราะทุกการเขียนต้องเข้าคิว
+     LockService ตัวเดียวกันของทั้งระบบ การกดส่งใบหนึ่งครั้งเดิมจับ-ปล่อยล็อก 5-8 รอบ
+     (ตัวใบ + ดัชนี + counters + รูปทีละรูป + แจ้งเตือน) ตอนนี้เหลือรอบเดียว
+     ล็อกนานขึ้นต่อครั้งจึงรอได้นานขึ้น (30 วิ) แต่จำนวนครั้งที่ต้องแย่งกันน้อยลงมาก */
+  if (Array.isArray(body.batch)) {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(30000);
+    try {
+      const pairs = [];
+      for (let i = 0; i < body.batch.length; i++) {
+        const item = body.batch[i] || {};
+        if (!item.key) continue;
+        // config ไม่ได้เก็บเป็นช่องเดียวใน KV (แตกเป็นแถวในสามแท็บ) จึงต้องไปทางของมันเอง
+        if (item.key === 'config') { writeConfigValue_(item.value); continue; }
+        pairs.push({ key: item.key, value: item.value });
+      }
+      // เขียนช่องใน KV ให้ครบก่อน แล้วค่อยไล่อัปเดตแท็บสำเนา — ข้อมูลตัวจริงต้องลงให้ได้ก่อนเสมอ
+      // ถ้าสลับลำดับ แล้วการซิงก์แท็บพังกลางทาง จะเหลือแท็บที่อัปเดตแล้วแต่ข้อมูลจริงยังไม่ลง
+      setKvValues_(pairs);
+      for (let i = 0; i < pairs.length; i++) mirrorKvWrite_(pairs[i].key, pairs[i].value);
+    } finally {
+      lock.releaseLock();
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, written: body.batch.length }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   const key = body.key;
   const value = body.value;
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
     if (key === 'config') {
-      const config = JSON.parse(value);
-      writeConfigSheets_(config);
-      setKvValue_('lineWebhooks', JSON.stringify(config.lineWebhooks || {}));
+      writeConfigValue_(value);
     } else {
       setKvValue_(key, value);
-      try {
-        /* v9: แอปเขียนใบแจ้งซ่อมมาทีละใบแล้ว (order:<id>) จึงอัปเดตแค่แถวของใบนั้น
-           ส่วนคีย์ 'orders' เดิมยังรับไว้เผื่อมีอะไรเขียนมา แต่ฝั่งแอปไม่เขียนแล้ว */
-        if (isOrderKey_(key)) {
-          const one = value ? JSON.parse(value) : null;
-          // ค่า null = ช่องของใบที่ถูกลบออกจากดัชนีแล้ว ข้ามไป การล้างแถวจัดการที่ orderIndex
-          if (one && one.id) syncOneOrderRow_(one);
-        } else if (key === ORDER_INDEX_KEY) {
-          /* ดัชนีว่าง = ผู้ดูแลกดล้างข้อมูลทั้งระบบ (ฝั่งแอปเขียนดัชนีว่างก่อนเสมอ แล้วค่อยล้างช่องของแต่ละใบ)
-             เป็นจังหวะเดียวที่รู้ได้ว่า "ใบหายไปแล้ว" จึงล้างแท็บที่นี่
-             ดัชนีที่ไม่ว่างไม่ต้องทำอะไร เพราะแต่ละใบซิงก์ผ่านคีย์ order:<id> ของตัวเองอยู่แล้ว */
-          const idx = value ? JSON.parse(value) : null;
-          if (Array.isArray(idx) && idx.length === 0) syncOrdersSheet_([]);
-        } else if (key === 'orders') {
-          syncOrdersSheet_(JSON.parse(value));
-        } else if (key === 'notifications') {
-          syncNotificationsSheet_(JSON.parse(value));
-        }
-      } catch (syncErr) {
-        // mirror sync failing shouldn't break saving — but log it so it's not a silent, undebuggable drift
-        logSyncError_('doPost:' + key, syncErr);
-      }
+      mirrorKvWrite_(key, value);
     }
   } finally {
     lock.releaseLock();
