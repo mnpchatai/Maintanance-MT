@@ -585,7 +585,7 @@ const LINE_RELAY_URL = 'https://script.google.com/macros/s/AKfycbxeSOl5USzFXNxiI
 const DEVICE_ID_KEY = 'mtDeviceId';
 /* บั๊มเลขนี้ทุกครั้งที่แก้ไข index.html — ใช้เทียบกับไฟล์ล่าสุดบนเซิร์ฟเวอร์เพื่อเตือนแท็บที่เปิดค้าง
    ไว้นานให้รีเฟรช ป้องกันปัญหาแท็บเก่ารันโค้ดที่ล้าสมัย (เช่น ลิงก์แจ้งเตือนที่ยังไม่มี deep link) */
-const APP_VERSION = '2026-09-12.7';
+const APP_VERSION = '2026-09-14.1';
 
 /* ============================= SNAPSHOT ในเครื่อง (เปิดแอปแล้วเห็นหน้าจอทันที) =============================
    ทุก storeGet คือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของสคริปต์คนเดียวสำหรับผู้ใช้ทุกคน
@@ -703,12 +703,20 @@ async function getUserRoles(userId){
 // ขอใบแจ้งซ่อมใบเดียวจากเซิร์ฟเวอร์ (กรองฝั่ง Apps Script) — ใช้ตอนเปิดแอปจากลิงก์แจ้งเตือน LINE
 // โดยตรง เพื่อโชว์หน้ารายละเอียดได้ไวโดยไม่ต้องรอโหลดรายการ orders ทั้งหมดก่อน
 async function getOrderById(id){
-  try{
-    const res = await fetch(API_URL + '?key=order&id=' + encodeURIComponent(id));
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    return data.value ? JSON.parse(data.value) : null;
-  }catch(e){ console.error('getOrderById failed', id, e); return null; }
+  // ที่เก็บใหม่: ใบนี้อยู่ในช่องของมันเอง อ่านตรงๆ ได้เลย ไม่ต้องให้ Apps Script ไปกรองจากก้อนใหญ่
+  const direct = await storeGet(orderKey(id));
+  if(direct && direct.id) return direct;
+  if(direct === null){
+    /* ไม่มีช่องของใบนี้ = ใบเก่าที่ยังไม่ถูกย้าย (เปิดจากลิงก์แจ้งเตือนก่อนที่เครื่องไหนจะย้ายให้)
+       ถอยไปใช้ตัวกรองฝั่ง Apps Script บนคีย์ 'orders' เดิม ซึ่งยังอ่านได้แม้จะเขียนไม่ได้แล้ว */
+    try{
+      const res = await fetch(API_URL + '?key=order&id=' + encodeURIComponent(id));
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      return data.value ? JSON.parse(data.value) : null;
+    }catch(e){ console.error('getOrderById legacy fallback failed', id, e); return null; }
+  }
+  return null;   // undefined = ดึงไม่สำเร็จ ผู้เรียกถือว่ายังไม่ได้ใบ
 }
 /* ============================= IDENTITY & ACCESS (ไม่ต้องล็อกอิน LINE) =============================
    ใครก็เปิดลิงก์แอปนี้จากเบราว์เซอร์อะไรก็ได้ แล้ว "ขอสิทธิ์" ในหน้าแรก → ผู้ดูแลระบบ (admin) กดอนุมัติ
@@ -1176,7 +1184,7 @@ async function copyText(text, okMsg){
 }
 /* เพดานจริงของ Google Sheets คือ 50,000 ตัวอักษร "ต่อหนึ่งช่อง" และคีย์หนึ่งคีย์ของ KV = ช่องเดียว
    ค่าที่ยาวเกินนี้ setValue() ฝั่ง Apps Script จะโยน error ทิ้ง — เขียนไม่ลงเลยสักตัวอักษร
-   เผื่อไว้ที่ 45,000 เพราะฝั่งเซิร์ฟเวอร์อาจห่อค่าเพิ่มอีกเล็กน้อยก่อนเขียน */
+   เผื่อไว้ 2,000 ตัวอักษร เพราะฝั่งเซิร์ฟเวอร์อาจห่อค่าเพิ่มอีกเล็กน้อยก่อนเขียน */
 const KV_VALUE_MAX = 48000;
 // คีย์ที่ฝั่งเซิร์ฟเวอร์ไม่ได้เก็บเป็นช่องเดียว จึงไม่อยู่ใต้เพดานนี้ (ดูเหตุผลใน storeSet)
 const KV_UNCAPPED_KEYS = new Set(['config']);
@@ -1184,16 +1192,22 @@ const KV_UNCAPPED_KEYS = new Set(['config']);
    "เชื่อมต่อฐานข้อมูลไม่ได้" กับ "ข้อมูลใหญ่เกินกว่าที่ชีตรับได้" ต้องแก้คนละทางกันโดยสิ้นเชิง
    ทางหนึ่งคือกดใหม่แล้วหาย อีกทางคือกดใหม่กี่ครั้งก็ไม่มีวันสำเร็จจนกว่าผู้ดูแลจะไปจัดการข้อมูล */
 let lastStoreSetError = '';
-/* คำเตือนความจุของคีย์ 'orders' — ใบแจ้งซ่อมทั้งระบบถูกเก็บเป็น JSON ก้อนเดียวในช่องเดียวของชีต
-   ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 2,300 ตัวอักษร เพดานจริงจึงอยู่แถวๆ 20 ใบ
-   เมื่อถึงเพดาน การส่งใบใหม่และการอนุมัติ "ทุกรายการ" จะล้มเหลวพร้อมกันทั้งระบบ ไม่ใช่ค่อยๆ แย่ลง
-   จึงต้องเห็นล่วงหน้า ไม่ใช่รู้ตัวตอนที่ทุกคนกดอะไรไม่ได้แล้ว — ทางแก้ระยะยาวคือแยกเก็บทีละใบ
-   ซึ่งต้องแก้สคริปต์ฝั่ง Apps Script ที่กระจกข้อมูลลงแท็บ ใบแจ้งซ่อม ด้วย (ไม่ได้อยู่ใน repo นี้) */
+/* คำเตือนความจุ — ตอนนี้ใบแจ้งซ่อมเก็บใบละช่องแล้ว (ดู "ที่เก็บใบแจ้งซ่อม" ด้านล่าง) เพดานจึงย้ายที่
+   จาก "ใบทั้งระบบรวมกันต้องไม่เกิน 50,000" มาเป็นสองอย่างที่กว้างกว่าเดิมมาก:
+     1. ใบเดี่ยวที่ยาวที่สุด ต้องไม่เกินเพดานช่อง — ใบที่เดินครบวงจรกินราว 3,700 จาก 48,000
+     2. ดัชนี orderIndex ต้องไม่เกินเพดานช่อง — ใบละ ~58 ตัวอักษร จึงอยู่ได้ราว 820 ใบ
+   ข้อ 2 คือเพดานถัดไปของระบบ ยังห่างมากแต่ไม่ใช่ไม่มี จึงต้องรายงานไว้ให้เห็นล่วงหน้าเหมือนเดิม
+   (ทางแก้เมื่อถึงวันนั้นคือให้ Apps Script ไล่แถวคีย์ order: ในแท็บ KV ส่งกลับมาเอง แล้วเลิกใช้ดัชนีฝั่งแอป) */
 function storageCapacityNote(){
   if(!state.ordersLoaded) return '';
+  const biggest = state.orders.reduce((a, o) => Math.max(a, JSON.stringify(o).length), 0);
   const rows = [
-    { label:'ใบแจ้งซ่อม (orders)', used: JSON.stringify(state.orders).length, count: state.orders.length + ' ใบ',
-      risk:'เมื่อเต็ม จะส่งใบใหม่และอนุมัติไม่ได้พร้อมกันทั้งระบบ ต้องแยกที่เก็บเป็นรายใบ ซึ่งต้องแก้ Apps Script ด้วย' },
+    { label:'ดัชนีใบแจ้งซ่อม (orderIndex)', used: JSON.stringify(state.orders.map(o => ({ i:o.id, r:'xxxxxxxxx' }))).length,
+      count: state.orders.length + ' ใบ',
+      risk:'เมื่อเต็ม จะส่งใบใหม่ไม่ได้ทั้งระบบ ทางแก้คือให้ Apps Script ส่งรายการคีย์ order: กลับมาเอง แทนการเก็บดัชนีในช่องเดียว' },
+    { label:'ใบแจ้งซ่อมที่ยาวที่สุด (order:<id>)', used: biggest,
+      count: state.orders.length ? 'ยาวสุดใน ' + state.orders.length + ' ใบ' : 'ยังไม่มีใบ',
+      risk:'ใบที่ยาวเกินเพดานจะบันทึกไม่ได้เฉพาะใบนั้น ใบอื่นไม่กระทบ — มักเกิดกับใบที่มีไทม์ไลน์ยาวผิดปกติ' },
     { label:'รายการแจ้งเตือน (notifications)', used: JSON.stringify(state.notifications).length, count: state.notifications.length + ' รายการ',
       risk:'ระบบตัดรายการเก่าทิ้งให้เองอัตโนมัติแล้ว ปกติจะไม่เต็ม' },
     { label:'คำขอสิทธิ์เข้าใช้งาน (accessRequests)', used: JSON.stringify(state.accessRequests || []).length, count: (state.accessRequests || []).length + ' รายการ',
@@ -1213,9 +1227,19 @@ function storageCapacityNote(){
     ${lines}
   </div>`;
 }
-function storeSetErrorHint(){
-  if(lastStoreSetError === 'too-large') return ' — ข้อมูลสะสมใหญ่เกินกว่าที่ Google Sheet รับได้ในช่องเดียว กรุณาแจ้งผู้ดูแลระบบ (กดใหม่ไม่ช่วย)';
-  return '';
+/* ประกอบข้อความล้มเหลวให้ "ตรงกับสาเหตุจริง" แทนการต่อท้ายคำอธิบายเข้าไปดื้อๆ
+   ของเดิมต่อท้ายอย่างเดียว ผู้ใช้จึงเห็นสองประโยคที่เถียงกันเองอยู่ในกล่องเดียว:
+     "มอบหมายงานไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง — ... (กดใหม่ไม่ช่วย)"
+   ทั้งที่ "เชื่อมต่อฐานข้อมูลไม่ได้" ไม่ใช่เรื่องจริงเลยเมื่อสาเหตุคือข้อมูลเกินเพดานช่อง
+   คำวินิจฉัยที่ผิดต้องถูก "แทนที่" ไม่ใช่ถูกต่อท้าย ไม่งั้นผู้ใช้ก็ยังเดาไม่ออกอยู่ดีว่าต้องทำอะไรต่อ */
+const STORE_FAIL_GENERIC = /\s*\(เชื่อมต่อฐานข้อมูลไม่ได้\)\s*กรุณาลองใหม่(อีกครั้ง)?/;
+function storeFailMsg(msg){
+  const base = msg || 'บันทึกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง';
+  if(lastStoreSetError === 'too-large')
+    return base.replace(STORE_FAIL_GENERIC, '') + ' — ข้อมูลชุดนี้ยาวเกินกว่าที่ Google Sheet รับได้ในช่องเดียว กดใหม่ไม่ช่วย กรุณาแจ้งผู้ดูแลระบบ';
+  if(lastStoreSetError === 'html' || lastStoreSetError === 'server')
+    return base.replace(STORE_FAIL_GENERIC, '') + ' — เซิร์ฟเวอร์ปฏิเสธการบันทึก (มักเป็นเรื่องสิทธิ์ของ Apps Script ที่ deploy ไว้) กรุณาแจ้งผู้ดูแลระบบ';
+  return base;
 }
 /* เดิมฟังก์ชันนี้ดูแค่รหัส HTTP แล้วตอบว่าสำเร็จ ไม่เคยอ่านคำตอบเลย ผลคือความล้มเหลวฝั่งเซิร์ฟเวอร์
    ทุกแบบที่ยังตอบ 200 กลับมา (Apps Script ดักข้อผิดพลาดเองแล้วตอบ 200, เขียนเกินเพดานช่อง,
@@ -1268,6 +1292,171 @@ async function storeSet(key, val){
   }catch(e){ lastStoreSetError = 'network'; console.error('storage set failed', key, e); return false; }
 }
 
+/* ============================= ที่เก็บใบแจ้งซ่อม: หนึ่งใบ = หนึ่งช่อง =============================
+   เดิมใบแจ้งซ่อม "ทุกใบในระบบ" ถูก stringify เป็นก้อนเดียวลงคีย์ 'orders' = ช่องเดียวของ Google Sheet
+   ซึ่งรับได้ 50,000 ตัวอักษร ใบที่เดินครบวงจรกินราว 3,700 ตัวอักษร เพดานจริงจึงอยู่แค่ราว 12-20 ใบ
+   และเมื่อถึงเพดาน ทุกอย่างที่ต้องเขียน orders (ส่งใบใหม่ อนุมัติ มอบหมายงาน บันทึกซ่อม ตรวจรับ)
+   ล้มเหลวพร้อมกันทั้งระบบในวินาทีเดียว ไม่ใช่ค่อยๆ แย่ลง — คือเหตุการณ์ 14 ก.ย. 2569
+
+   การขยับเพดาน (ย้าย statusHistory ออก, ตัดใบเก่าไปเก็บคลัง) ได้แค่ ~22 และ ~60 ใบ แล้วกลับมาพังอีก
+   จึงไม่ใช่ทางแก้ ทางแก้คือถอดเพดานทิ้ง: เก็บ "ใบละช่อง" เหมือนที่ทำกับรูปภาพสำเร็จมาแล้ว (ดู photoKey)
+   ใบหนึ่งใช้ 3,700 จาก 50,000 = เหลือที่ 13 เท่าต่อใบ และจำนวนใบไม่จำกัดด้วยเพดานช่องอีกต่อไป
+
+   โครงสร้าง:
+     orderIndex          → [{ i:<id>, r:<rev> }, ...]   ดัชนีเล็กๆ ใบละ ~58 ตัวอักษร (~820 ใบต่อช่อง)
+     order:<id>          → อ็อบเจกต์ใบนั้นทั้งใบ        ช่องละใบ
+   rev เปลี่ยนทุกครั้งที่ใบถูกเขียน ใช้เทียบว่า "ใบไหนเปลี่ยนไปแล้วบ้าง" โดยไม่ต้องดึงตัวใบมาเทียบ
+   รอบ poll จึงดึงแค่ orderIndex (คำขอเดียว) แล้วดึงเฉพาะใบที่ rev ไม่ตรง — ถูกกว่าเดิมที่ลากทั้งก้อนทุกรอบ
+
+   ผลพลอยได้: แก้อาการ "สองคนกดพร้อมกันแล้วงานของคนหนึ่งหายไป" ที่ค้างมานาน เพราะแต่ละคนเขียนคนละช่อง
+   ไม่ได้เอา state.orders ทั้งก้อนของตัวเอง (ซึ่งอาจเก่าไปกว่านาทีครึ่งตามจังหวะ poll) ทับของคนอื่นอีกแล้ว
+
+   หมายเหตุ: คีย์ 'orders' เดิมถูก "ทิ้งไว้เฉยๆ" ไม่ลบและไม่เขียนทับ — เป็นข้อมูลสำรองก่อนย้ายระบบ
+   และตอนนี้มันเกินเพดานช่องไปแล้วจึงเขียนลงไม่ได้อยู่ดี แท็บ "ใบแจ้งซ่อม" ในชีต (ซึ่ง Apps Script
+   สร้างใหม่จากคีย์นั้น) จะค้างอยู่ที่ข้อมูลเดิมจนกว่าจะแก้ฝั่ง Apps Script ให้อ่านจากคีย์ order:<id> แทน */
+const ORDER_INDEX_KEY = 'orderIndex';
+function orderKey(id){ return 'order:' + id; }
+/* ยิงคำขอพร้อมกันได้ไม่เกินครั้งละ 6 — ทุกคำขอคือหนึ่ง execution ของ Apps Script ซึ่งรันในนามเจ้าของ
+   สคริปต์คนเดียวสำหรับผู้ใช้ทุกคน และมีเพดานจำนวน execution ที่รันพร้อมกันได้
+   จุดที่สำคัญที่สุดคือตอน "ย้ายระบบครั้งแรก" ซึ่งต้องเขียนทุกใบรวดเดียว ถ้ายิงพร้อมกัน 30 คำขอแล้วโดน
+   ปฏิเสธไปบางส่วน การย้ายจะล้มทั้งรอบทั้งที่ระบบไม่ได้มีอะไรผิด — และนั่นคือรอบที่โรงงานรออยู่พอดี
+   6 ช้ากว่าการยิงทีเดียวหมดไม่กี่วินาที แลกกับความแน่นอน คุ้มกว่ามากในจังหวะนั้น */
+async function mapLimit(items, limit, fn){
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while(next < items.length){
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+const KV_PARALLEL = 6;
+// rev ใหม่ทุกครั้งที่เขียน — ใช้เทียบ "ไม่เท่ากัน" อย่างเดียว ไม่ได้ใช้เรียงลำดับ จึงไม่ต้องกลัวนาฬิกาเครื่องเพี้ยน
+function newRev(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+/* สภาพของใบแต่ละใบ "เท่าที่ยืนยันแล้วว่าตรงกับบนเซิร์ฟเวอร์"
+   json ใช้ดูว่าใบไหนเปลี่ยนไปจริงตั้งแต่ครั้งที่แล้ว จะได้เขียนเฉพาะใบนั้น ไม่ใช่เขียนใหม่ทุกใบทุกครั้ง
+   rev ใช้เทียบกับดัชนีบนเซิร์ฟเวอร์ตอน poll ว่ามีใครแก้ใบไหนไปบ้าง */
+let savedOrderJson = new Map();   // id -> JSON string ที่เขียนสำเร็จ/โหลดมาล่าสุด
+let savedOrderRev  = new Map();   // id -> rev บนเซิร์ฟเวอร์
+function rememberOrder(o, rev){
+  savedOrderJson.set(o.id, JSON.stringify(o));
+  savedOrderRev.set(o.id, rev);
+}
+function forgetOrder(id){ savedOrderJson.delete(id); savedOrderRev.delete(id); }
+function resetOrderBookkeeping(){ savedOrderJson = new Map(); savedOrderRev = new Map(); }
+
+/* อ่านใบทั้งหมดจากที่เก็บใหม่
+   คืน undefined = ดึงไม่สำเร็จ (ห้ามให้ผู้เรียกปลดล็อก ordersLoaded — ดูบทเรียนใน loadBackground)
+   คืน null      = ยังไม่มีดัชนี แปลว่ายังไม่ย้ายระบบ ผู้เรียกต้องไปอ่านคีย์ 'orders' เดิมแล้วย้ายให้ */
+async function loadOrdersFromStore(){
+  const idx = await storeGet(ORDER_INDEX_KEY);
+  if(idx === undefined) return undefined;
+  if(idx === null) return null;
+  if(!Array.isArray(idx)) return null;
+  const parts = await mapLimit(idx, KV_PARALLEL, e => storeGet(orderKey(e.i)));
+  // ดึงไม่สำเร็จแม้ใบเดียว = ถือว่าทั้งรอบไม่สำเร็จ ห้ามคืนรายการที่ขาดใบไปให้เขียนทับของจริงทีหลัง
+  if(parts.some(p => p === undefined)) return undefined;
+  resetOrderBookkeeping();
+  const list = [];
+  parts.forEach((o, n) => {
+    // null = ดัชนีชี้ไปยังช่องที่ไม่มีข้อมูล (เขียนใบสำเร็จแต่เขียนดัชนีไม่สำเร็จแล้วผู้ใช้กดใหม่)
+    // ข้ามไปได้ ไม่ใช่ความล้มเหลว แต่ต้องเห็นใน console เพราะแปลว่ามีเศษค้างอยู่บนชีต
+    if(!o || !o.id){ console.warn('orderIndex ชี้ไปยังใบที่ไม่มีข้อมูล', idx[n] && idx[n].i); return; }
+    rememberOrder(o, idx[n].r);
+    list.push(o);
+  });
+  return list;
+}
+/* รอบ poll: ดึงดัชนีคำขอเดียว แล้วดึงเฉพาะใบที่ rev ไม่ตรงกับที่ถืออยู่
+   คืน undefined เมื่อดึงไม่สำเร็จ, null เมื่อยังไม่ย้ายระบบ, หรือ { list } เมื่อสำเร็จ */
+async function loadOrdersDelta(){
+  const idx = await storeGet(ORDER_INDEX_KEY);
+  if(idx === undefined) return undefined;
+  if(idx === null || !Array.isArray(idx)) return null;
+  const stale = idx.filter(e => savedOrderRev.get(e.i) !== e.r);
+  const fetched = await mapLimit(stale, KV_PARALLEL, e => storeGet(orderKey(e.i)));
+  if(fetched.some(p => p === undefined)) return undefined;
+  const byId = new Map();
+  stale.forEach((e, n) => { if(fetched[n] && fetched[n].id) byId.set(e.i, { o: fetched[n], r: e.r }); });
+  // ประกอบรายการใหม่ "ตามลำดับของดัชนี" เสมอ ดัชนีคือแหล่งความจริงของทั้งลำดับและสมาชิก
+  const prev = new Map(state.orders.map(o => [o.id, o]));
+  const list = [];
+  for(const e of idx){
+    const hit = byId.get(e.i);
+    if(hit){ list.push(hit.o); continue; }
+    const old = prev.get(e.i);
+    if(old){ list.push(old); continue; }
+    console.warn('orderIndex ชี้ไปยังใบที่ไม่มีข้อมูล', e.i);
+  }
+  // อัปเดตสมุดบัญชีให้ตรงกับดัชนีรอบนี้ รวมถึงลบใบที่หายไปจากดัชนีออกจากสมุดด้วย
+  const alive = new Set(idx.map(e => e.i));
+  for(const id of [...savedOrderJson.keys()]) if(!alive.has(id)) forgetOrder(id);
+  byId.forEach((v, id) => rememberOrder(v.o, v.r));
+  return { list };
+}
+/* ย้ายข้อมูลจากคีย์ 'orders' ก้อนเดียวมาเป็นใบละช่อง — ทำครั้งเดียว เครื่องไหนโหลดเจอก่อนก็ทำให้
+   เขียน "ตัวใบ" ให้ครบก่อน แล้วค่อยเขียน "ดัชนี" เป็นขั้นสุดท้ายเสมอ เพราะดัชนีคือตัวที่ทำให้ระบบ
+   เปลี่ยนมาอ่านที่เก็บใหม่ ถ้าเขียนดัชนีก่อนแล้วตัวใบเขียนไม่ครบ ผู้ใช้จะเห็นใบหายทันที
+   ล้มเหลวกลางคันได้โดยไม่เสียหาย: คีย์ 'orders' เดิมยังอยู่ครบ และรอบหน้าจะย้ายใหม่ทั้งชุด */
+async function migrateOrdersToPerKey(orders){
+  if(!Array.isArray(orders)) return false;
+  const oks = await mapLimit(orders, KV_PARALLEL, o => storeSet(orderKey(o.id), o));
+  if(!oks.every(Boolean)){
+    console.error('ย้ายข้อมูลใบแจ้งซ่อมไม่สำเร็จ — เขียนตัวใบไม่ครบ', oks.filter(x => !x).length, 'ใบ');
+    return false;
+  }
+  const idx = orders.map(o => ({ i:o.id, r:newRev() }));
+  if(!await storeSet(ORDER_INDEX_KEY, idx)) return false;
+  resetOrderBookkeeping();
+  orders.forEach((o, n) => rememberOrder(o, idx[n].r));
+  return true;
+}
+/* เขียนกลับเซิร์ฟเวอร์เฉพาะ "ใบที่เปลี่ยนจริง" — ผู้เรียกยังส่ง state.orders ทั้งก้อนมาเหมือนเดิม
+   จึงไม่ต้องแก้จุดเรียกทั้ง 15 จุด (ยิ่งแก้จุดเรียกเยอะยิ่งมีโอกาสตกหล่นทีละจุดแบบที่เคยเกิดมาแล้ว)
+   ลำดับการเขียน: ตัวใบก่อน → ดัชนีทีหลัง ด้วยเหตุผลเดียวกับ migrateOrdersToPerKey */
+async function saveOrdersDiff(list){
+  const nextJson = new Map();
+  const changed = [];
+  for(const o of list){
+    const j = JSON.stringify(o);
+    nextJson.set(o.id, j);
+    if(savedOrderJson.get(o.id) !== j) changed.push(o);
+  }
+  const removed = [...savedOrderJson.keys()].filter(id => !nextJson.has(id));
+  // ไม่มีอะไรเปลี่ยนเลยก็ไม่ต้องยิงคำขอให้เปลืองโควตา Apps Script
+  if(!changed.length && !removed.length) return true;
+  const revs = new Map();
+  if(changed.length){
+    const oks = await mapLimit(changed, KV_PARALLEL, o => {
+      const r = newRev(); revs.set(o.id, r);
+      return storeSet(orderKey(o.id), o);
+    });
+    if(!oks.every(Boolean)) return false;
+  }
+  const idx = list.map(o => ({ i:o.id, r: revs.get(o.id) || savedOrderRev.get(o.id) || newRev() }));
+  if(!await storeSet(ORDER_INDEX_KEY, idx)) return false;
+  changed.forEach(o => rememberOrder(o, revs.get(o.id)));
+  removed.forEach(forgetOrder);
+  // ล้างช่องของใบที่ถูกลบออกจากดัชนีแล้ว — ทำแบบไม่รอผล ถ้าพลาดก็เหลือแค่เศษที่ไม่มีใครอ่าน
+  removed.forEach(id => { storeSet(orderKey(id), null); });
+  return true;
+}
+/* ล้างใบแจ้งซ่อมทั้งหมด (ปุ่ม "ล้างข้อมูล" ของ admin)
+   ต้องอ่านดัชนีจากเซิร์ฟเวอร์ก่อน ห้ามอาศัยสมุดบัญชีในเครื่อง เพราะปุ่มนี้กดได้ตั้งแต่ยังโหลดใบไม่เสร็จ
+   ถ้าอาศัยสมุดที่ยังว่างอยู่ saveOrdersDiff จะเห็นว่า "ไม่มีอะไรต้องลบ" แล้วคืน true ทั้งที่ไม่ได้ล้างอะไรเลย
+   ผู้ใช้จะเห็นข้อความว่าล้างเรียบร้อย แล้วใบทั้งหมดกลับมาในรอบ poll ถัดไป */
+async function clearOrdersStore(){
+  const idx = await storeGet(ORDER_INDEX_KEY);
+  if(idx === undefined) return false;
+  if(!await storeSet(ORDER_INDEX_KEY, [])) return false;
+  resetOrderBookkeeping();
+  if(Array.isArray(idx)) idx.forEach(e => { storeSet(orderKey(e.i), null); });
+  return true;
+}
+
 /* โหลดเฉพาะข้อมูลที่จำเป็นต่อการใช้งานหน้าแรก (ฟอร์ม "ใบคำร้อง/ใบแจ้งซ่อม") ให้เร็วที่สุด — แผนก/
    เครื่องจักร/ช่างอยู่ใน config เท่านั้น ส่วน orders/notifications/counters (ก้อนใหญ่ โตขึ้นเรื่อยๆ
    ตามประวัติ) กับข้อมูลหน้าตั้งค่า (lineUsers ฯลฯ ใช้แค่ admin) เลื่อนไปโหลดทีหลังแยกต่างหาก */
@@ -1305,11 +1494,46 @@ async function loadEssential(){
     }
   }
 }
+/* อ่านใบแจ้งซ่อมทั้งหมด แล้ว "ย้ายระบบให้เอง" ถ้ายังไม่เคยย้าย
+   คืนค่าแบบเดียวกับ storeGet เป๊ะๆ (undefined = ดึงไม่สำเร็จ) เพื่อให้ผู้เรียกเดิมไม่ต้องเปลี่ยนวิธีคิด
+   จุดสำคัญ: ตอนนี้คีย์ 'orders' เดิมล้นช่องไปแล้วจึง "เขียน" ไม่ได้ แต่ "อ่าน" ได้ตามปกติ
+   การย้ายจึงทำได้แม้ระบบกำลังติดเพดานอยู่ — และการย้ายนั่นแหละคือสิ่งที่ปลดล็อกให้ใช้งานต่อได้ */
+let orderMigrationTried = false;
+async function loadOrdersOnce(){
+  const fromStore = await loadOrdersFromStore();
+  if(fromStore !== null) return fromStore;          // undefined (พลาด) หรือรายการจริง — ส่งต่อตามนั้น
+  const legacy = await storeGet('orders');
+  if(legacy === undefined) return undefined;
+  const list = legacy || [];
+  // ย้ายครั้งเดียวต่อการเปิดแอปหนึ่งครั้ง ย้ายไม่สำเร็จก็ยังใช้งานอ่านได้จากของเดิมไปก่อน
+  if(!orderMigrationTried){
+    if(await migrateOrdersToPerKey(list)){
+      orderMigrationTried = true;
+      console.info('ย้ายใบแจ้งซ่อมมาเก็บแบบใบละช่องแล้ว', list.length, 'ใบ');
+    }else if(lastStoreSetError === 'too-large'){
+      // มีใบเดี่ยวที่ยาวเกินเพดานช่อง ลองใหม่กี่รอบก็ไม่ขึ้น ต้องมีคนไปจัดการข้อมูลใบนั้นก่อน
+      orderMigrationTried = true;
+      console.error('ย้ายใบแจ้งซ่อมไม่สำเร็จ — มีใบที่ยาวเกินกว่าที่ Google Sheet รับได้ในช่องเดียว');
+    }else{
+      // เน็ต/เซิร์ฟเวอร์กระตุกเฉยๆ — ปล่อยให้รอบ poll ถัดไปลองย้ายใหม่ ไม่ต้องให้ผู้ใช้รีเฟรชหน้าเอง
+      console.error('ย้ายใบแจ้งซ่อมไม่สำเร็จ — จะลองใหม่ในรอบถัดไป');
+    }
+  }
+  return list;
+}
+/* รอบ poll: ปกติเสียแค่คำขอเดียว (ดัชนี) แล้วดึงเฉพาะใบที่มีคนแก้จริง
+   เบากว่าเดิมที่ลากใบทั้งระบบกลับมาใหม่ทุก 15-90 วินาทีไม่ว่าจะมีอะไรเปลี่ยนหรือไม่ */
+async function pollOrders(){
+  const delta = await loadOrdersDelta();
+  if(delta === undefined) return undefined;
+  if(delta === null) return await loadOrdersOnce();   // ยังไม่ย้ายระบบ — อ่านของเดิมแล้วย้ายให้ตรงนี้เลย
+  return delta.list;
+}
 /* ก้อนข้อมูลใหญ่/โตเรื่อยๆ — โหลดคู่ขนานไปเบื้องหลังหลังหน้าจอแรกโชว์แล้ว ไม่บล็อกผู้ใช้
    (ปุ่มที่ต้องเขียนกลับ orders ทุกปุ่มเช็ค state.ordersLoaded ก่อนเสมอ ดู persistOrders()) */
 async function loadBackground(){
   const [counters, orders, notifs] = await Promise.all([
-    storeGet('counters'), storeGet('orders'), storeGet('notifications')
+    storeGet('counters'), loadOrdersOnce(), storeGet('notifications')
   ]);
   if(counters !== undefined) state.counters = counters || {};
   // storeGet คืน undefined เมื่อดึงไม่สำเร็จ (คนละความหมายกับ null ที่แปลว่า "ไม่มีคีย์นี้จริงๆ")
@@ -1971,8 +2195,8 @@ async function pushNotification(toRole, orderId, docNumber, message, target, opt
   }
   const [res, saved] = await Promise.all([linePromise, queueNotification(n)]);
   // อย่าสัญญาว่า "จะลองใหม่ให้เอง" เมื่อสาเหตุคือขนาด เพราะลองกี่รอบก็ไม่มีวันสำเร็จจนกว่าจะมีคนไปจัดการ
-  if(!saved) toast(lastStoreSetError === 'too-large'
-    ? 'บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ' + storeSetErrorHint()
+  if(!saved) toast(lastStoreSetError
+    ? storeFailMsg('บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ')
     : 'บันทึกการแจ้งเตือนลงระบบไม่สำเร็จ — ระบบจะลองใหม่ให้เองในรอบถัดไป', true);
   // ok === false เท่านั้นที่แปลว่า "ไม่ถึงใครเลยแน่ๆ" (null = ส่งแล้วแต่อ่านผลไม่ได้ ไม่ใช่ความล้มเหลว)
   // บอกคนที่กดปุ่มไปเลยว่าแจ้งเตือนในแอปบันทึกแล้วแต่ LINE ไม่ออก จะได้ไม่เข้าใจผิดว่าส่งไปแล้ว
@@ -2518,9 +2742,9 @@ async function submitOrder(){
   // เขียน "orders" ก่อน — นี่คือข้อมูลตัวจริงของใบแจ้งซ่อม ต้องสำเร็จก่อนถึงจะถือว่าส่งคำร้องได้จริง
   // ห้ามอัปเดต state.orders/แสดงข้อความสำเร็จถ้า storeSet ล้มเหลว (เช่น deploy สิทธิ์ผิด, เน็ตหลุด)
   // มิฉะนั้นผู้ใช้จะเห็นว่า "ส่งเรียบร้อย" ทั้งที่ข้อมูลไม่เข้าชีตจริง
-  const ordersOk = await storeSet('orders', newOrders);
+  const ordersOk = await saveOrdersDiff(newOrders);
   if(!ordersOk){
-    toast('ส่งใบแจ้งซ่อมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง' + storeSetErrorHint(), true);
+    toast(storeFailMsg('ส่งใบแจ้งซ่อมไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง'), true);
     return;
   }
   state.orders = newOrders;
@@ -2591,7 +2815,7 @@ function getOrder(id){ return state.orders.find(o => o.id === id); }
 // ห้ามเขียนทับ "orders" บนเซิร์ฟเวอร์ด้วยรายการที่ไม่ครบ ไม่งั้นใบอื่นๆ ที่ยังไม่ถูกโหลดมาจะหายไปหมด
 async function persistOrders(){
   if(!state.ordersLoaded){ console.warn('persistOrders skipped — orders not fully loaded yet'); return false; }
-  return await storeSet('orders', state.orders);
+  return await saveOrdersDiff(state.orders);
 }
 /* บันทึกใบกลับเซิร์ฟเวอร์ แล้ว "ย้อนคืน" ค่าที่เพิ่งแก้ในหน้าจอถ้าเขียนไม่สำเร็จ
    จำเป็นคู่กับกล่อง ✓ "ส่งข้อมูลเรียบร้อย" ที่เด่นกว่าเดิมมาก: ถ้าปล่อยให้ state ค้างอยู่กับผลที่
@@ -2600,7 +2824,7 @@ async function persistOrders(){
 async function persistOrderChange(undo, errMsg){
   if(await persistOrders()) return true;
   try{ undo(); }catch(e){ console.error('undo failed', e); }
-  toast((errMsg || 'บันทึกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง') + storeSetErrorHint(), true);
+  toast(storeFailMsg(errMsg), true);
   render();
   return false;
 }
@@ -2655,7 +2879,7 @@ async function saveNeededDate(id){
   if(!ok){
     // เขียนกลับเซิร์ฟเวอร์ไม่สำเร็จ — คืนค่าเดิมใน state ทันที ห้ามปล่อยให้หน้าจอโชว์ค่าที่ยังไม่เข้าฐานข้อมูลจริง
     o.neededDate = oldDate; o.urgent = oldUrgent; o.statusHistory.pop();
-    toast('บันทึกการแก้ไขไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    toast(storeFailMsg('บันทึกการแก้ไขไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง'), true);
     render();
     return;
   }
@@ -3083,7 +3307,7 @@ async function saveMaintRecord(id){
     // (เดิมฟังก์ชันนี้ไม่ดูผลลัพธ์ของ persistOrders เลย จึงขึ้น "บันทึกเรียบร้อย" ทั้งที่ข้อมูลหาย)
     o.maintRecord = prevRecord; o.opinionProgress = prevProgress;
     o.statusHistory.length = histLen;
-    toast('บันทึกข้อมูลซ่อมบำรุงไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่', true);
+    toast(storeFailMsg('บันทึกข้อมูลซ่อมบำรุงไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่'), true);
     render();
     return;
   }
@@ -3204,7 +3428,7 @@ async function saveOpinionStep(id){
     // ไม่งั้นผู้ใช้จะเห็นหมุดขึ้นเขียวทั้งที่ไม่มีใครอื่นเห็น แล้วก็ไม่มีใครได้รับแจ้งเตือนด้วย
     o.opinionProgress = prevProgress;
     o.statusHistory.pop();
-    toast('บันทึกความคืบหน้าไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่', true);
+    toast(storeFailMsg('บันทึกความคืบหน้าไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่'), true);
     render();
     return;
   }
@@ -3314,7 +3538,7 @@ async function saveWebhook(){
   const ok = await storeSet('config', state.config);
   if(!ok){
     state.config.lineWebhooks[role] = prevUrl;
-    toast('บันทึก Webhook ไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    toast(storeFailMsg('บันทึก Webhook ไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง'), true);
     render();
     return;
   }
@@ -3341,12 +3565,12 @@ async function resetAllData(){
   state.counters = {}; state.orders = []; state.notifications = [];
   pendingNotifs.clear();   // ไม่งั้นแถวที่ยังค้างยืนยันจะถูกยัดกลับเข้ามาหลังล้างข้อมูล
   const okCounters = await storeSet('counters', state.counters);
-  const okOrders = await storeSet('orders', state.orders);
+  const okOrders = await clearOrdersStore();
   const okNotifs = await storeSet('notifications', state.notifications);
   if(!(okCounters && okOrders && okNotifs)){
     // เขียนไม่ครบ = บนเซิร์ฟเวอร์ถูกล้างไปบางส่วนจริง ย้อนค่าในเครื่องกลับไม่ได้แล้ว
     // จึงบอกตามตรงแล้วปล่อยให้รอบ poll ถัดไปดึงสภาพจริงมาแสดง ห้ามขึ้น "เรียบร้อย"
-    toast('ล้างข้อมูลไม่สำเร็จครบทุกส่วน (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง', true);
+    toast(storeFailMsg('ล้างข้อมูลไม่สำเร็จครบทุกส่วน (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่อีกครั้ง'), true);
     render();
     return;
   }
@@ -4698,7 +4922,7 @@ async function pollForUpdates(){
       ? Promise.all([storeGet('lineUsers'), storeGet('lineUserRoles'), storeGet('lineRecipients')])
       : Promise.resolve([null, null, null]);
     const [cfg, orders, notifs, reqs, [lineUsers, lineUserRoles, lineRecipients]] = await Promise.all([
-      storeGet('config'), storeGet('orders'), storeGet('notifications'), storeGet('accessRequests'),
+      storeGet('config'), pollOrders(), storeGet('notifications'), storeGet('accessRequests'),
       lineDataPromise
     ]);
     let changed = false;

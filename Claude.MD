@@ -41,10 +41,22 @@ index.html (GitHub Pages, static)
                                       follow/message → logs userId to Sheet)
 ```
 Both Apps Script projects live in Google's account, not in this git repo.
-Their source is only ever pasted by hand into the Apps Script editor — see
-"Apps Script projects" below for the current full source of each, and always
+Their source is only ever pasted by hand into the Apps Script editor, and always
 paste the entire file, replacing everything (partial pastes have broken
 things before by deleting helper functions).
+**Both projects' sources now live in this repo** — `docs/line-relay.gs` (LINE
+relay) and `docs/main-api.gs` (main data API, added 14 Sep 2026). An earlier
+version of this file claimed an "Apps Script projects" section below held them;
+no such section ever existed, so every change to the server side had to be made
+by guessing at what it did. `docs/order-store.test.mjs` now fails the build if a file
+path named in these docs does not exist, because that mistake was made twice.
+Neither file runs from the repo: they are pasted by hand into the Apps Script
+editor. A commit here changes nothing in production until that paste happens, so
+**when `docs/main-api.gs` changes, say so explicitly** — and `?key=version`
+returning the old `CODE_VERSION` is how to tell it has not been pasted yet.
+`docs/main-api.test.mjs` runs that file against a fake `SpreadsheetApp`
+(`node docs/main-api.test.mjs`, no dependencies, reads `main-api.gs` live), which
+is the only way to exercise it outside Google's servers.
 1. `index.html` — the client
 Constants near the top: `API_URL` (main data API), `SHEET_URL` (link
 shown in Settings), `APP_URL` (used to build notification deep links) and
@@ -471,8 +483,9 @@ Apps Script to edit it). Deployed as a Web App (Execute as: Me, Who has
 access: Anyone) at the URL in `API_URL`.
 Two-tier storage model:
 KV sheet (`KV` tab): generic key→JSON-string store. Keys in use:
-`orders`, `counters`, `notifications`, `photos:<id>`, `lineWebhooks`,
-`accessRequests`, `lineUsers`, `lineUserRoles`. This
+`orderIndex`, `order:<id>`, `counters`, `notifications`, `photos:<id>`,
+`lineWebhooks`, `accessRequests`, `lineUsers`, `lineUserRoles`, and the
+retired `orders` (see below). This
 is the literal backing store for `storeGet`/`storeSet` in the client for
 everything except `config`.
 **The 50,000-character-per-cell ceiling is the sharpest edge in this design.**
@@ -500,14 +513,44 @@ Two things were hitting that ceiling:
   WebView could not take photos at all — the bug had been silently eating
   attachments for as long as anyone had managed to attach one.
 - **`orders` itself, and this one is not fixed.** Every order in the system is one
-  JSON blob in one cell. A fully-worked order is ~2,300 characters, so the ceiling
-  arrives somewhere around 20 orders, and when it does, *every* submit and every
-  approval fails at once — it does not degrade gradually. `storageCapacityNote()`
-  on the Settings page warns from 70% and escalates at 90% so this is seen coming.
-  The real fix is one key per order, which also kills the lost-update race below,
-  but it cannot be done from this repo alone: the Apps Script mirror reads the
-  `orders` key to rebuild the ใบแจ้งซ่อม tab and would have to be rewritten by hand
-  to match.
+  JSON blob in one cell. A fully-worked order measures ~3,700 characters (the
+  ~2,300 written here before 14 Sep 2026 was optimistic — see the harness in
+  `docs/order-store.test.mjs`), so the ceiling arrived at **12-20 orders**, and
+  when it did, *every* submit and every approval failed at once — it did not
+  degrade gradually. That is exactly what happened on 14 Sep 2026: assignment,
+  approval and submission all stopped system-wide within the same minute.
+  **Fixed 14 Sep 2026 — one order is now one cell.** `orderIndex` holds
+  `[{i:<id>, r:<rev>}]` and each order lives in `order:<id>`. An order uses 3,700
+  of 48,000 characters, so the per-order headroom is 13x and the *number* of
+  orders is no longer bounded by a cell at all. `rev` changes on every write, so a
+  poll costs one request for the index plus one per order somebody actually
+  changed — cheaper than the old design, which dragged every order back across the
+  wire every 15-90 seconds regardless. Fan-out is capped at `KV_PARALLEL` (6) by
+  `mapLimit()`, because every KV request is one Apps Script execution and the
+  cold-load/migration burst would otherwise fire one per order at once. Migration is automatic and one-way:
+  `loadOrdersOnce()` reads the legacy `orders` key and calls
+  `migrateOrdersToPerKey()` the first time it finds no index. Crucially, the
+  legacy key could still be *read* while it was too big to *write*, which is why
+  the migration could run at all while the system was wedged.
+  Order of writes is always **cells first, index last** — the index is what makes
+  an order visible, so a half-written batch must never be pointed at.
+  The next ceiling is `orderIndex` itself at roughly 820 orders (~58 characters
+  per entry); `storageCapacityNote()` tracks it. Retiring it means having Apps
+  Script enumerate the `order:` rows in the KV tab server-side and return them in
+  one response, which also removes the per-order fan-out on a cold load.
+  The old `orders` key is deliberately left in place, neither read (except during
+  migration) nor written: it is the pre-migration backup, and it is over the cell
+  limit anyway.
+  The Apps Script side was updated to match in `docs/main-api.gs` v9: `doPost`
+  recognises `order:<id>` and rewrites **only that order's row** in the ใบแจ้งซ่อม
+  tab instead of clearing and rewriting every row on every approval, which is
+  strictly faster than the old behaviour and gets faster the more orders exist. A
+  new trailing column AD "รหัสอ้างอิงระบบ" holds `order.id` so a row can be found
+  again; A-AC do not move, so `onEditDocForm_`'s fixed offsets still hold. An empty
+  `orderIndex` is the one signal that orders were deleted (the client writes it
+  before blanking the cells), and that is what clears the tab. **The tab stays
+  frozen until that file is pasted into the Apps Script editor** — the repo cannot
+  deploy it.
 Two keys that look like they share the ceiling but do not: `config` is written by
 `doPost('config', ...)` as *rows* across the แผนก/เครื่องจักร/ช่าง tabs, never as one
 cell, so it is listed in `KV_UNCAPPED_KEYS` and skips the size guard — a factory
@@ -518,16 +561,23 @@ now does the same through `trimNotifications()` (read entries are dropped oldest
 first, unread ones only if that is still not enough), because it previously grew
 without any limit at roughly 10-14 entries per order — a ceiling of 8-15 orders,
 tighter than `orders` itself.
-`storageCapacityNote()` on the Settings page reports all three single-cell keys
-with a per-key percentage, so whichever one is closest to the wall is visible
-before it stops the system.
+`storageCapacityNote()` on the Settings page reports every single-cell key with a
+per-key percentage — now `orderIndex`, the longest individual order,
+`notifications` and `accessRequests` — so whichever one is closest to the wall is
+visible before it stops the system.
 
-**Writes to `orders` still have no read-before-write.** `saveNotifications()` and
-`saveAccessRequests()` both fetch the latest copy and merge before writing;
-`persistOrders()` and `submitOrder()` still blast `state.orders` wholesale. With
-polling backed off to 15-90s, a client's copy can be a minute and a half stale, so
-two people acting in the same window silently delete each other's work and both
-are told it succeeded. The same `saveNotifications` pattern is what this needs.
+**The lost-update race on orders is gone for edits to different orders.**
+`persistOrders()` and `submitOrder()` used to blast `state.orders` wholesale, so
+with polling backed off to 15-90s two people acting in the same window silently
+deleted each other's work and both were told it succeeded. `saveOrdersDiff()` now
+compares each order against `savedOrderJson` (what was last confirmed on the
+server) and writes only the cells that actually changed, so editing different
+orders concurrently cannot collide. Two people editing *the same* order in the
+same window is still last-writer-wins — a genuine merge there would need the
+`saveNotifications()` read-before-write pattern per order.
+Call sites were deliberately left alone: all ~15 of them still hand
+`persistOrderChange()` the whole `state.orders` array, because changing them one
+by one is how things get missed.
 
 `config` is special and bidirectional: departments/machines/
 technicians are not stored as JSON in KV. `doGet('config')` builds the
